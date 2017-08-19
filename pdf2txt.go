@@ -28,7 +28,7 @@ type pdfArray struct {
 }
 
 type pdfDictionary struct {
-	Entries map[string][]byte
+	Entries map[string]pdfItem
 }
 
 type pdfStream struct {
@@ -36,6 +36,8 @@ type pdfStream struct {
 
 type pdfNull struct {
 }
+
+type pdfItem interface {}
 
 type pdfDocument struct {
 }
@@ -52,13 +54,14 @@ func parsePdf(pdf io.Reader) (*pdfDocument, error) {
 	br := bufio.NewReader(pdf)
 	var b byte
 	var err error
+	d := &pdfDocument{}
 	for b, err = br.ReadByte(); err == nil; b, err = br.ReadByte() {
-		readObjects(b, br)
+		readNext(b, br)
 	}
-	return &pdfDocument{}, err
+	return d, err
 }
 
-func readObjects(b byte, r *bufio.Reader) error {
+func readNext(b byte, r *bufio.Reader) pdfItem {
 	var err error
 	var v []byte
 	switch b {
@@ -116,17 +119,20 @@ func readDictionary(r *bufio.Reader) (*pdfDictionary, error) {
 		if err != nil {
 			return nil, err
 		}
-		err = readObjects(b, r)
-		b, err := r.Peek(2)
+		d.Entries[string(name)] = readNext(b, r)
+		p, err := r.Peek(2)
 		if err != nil {
-
+			return d, err
+		}
+		if string(p) == ">>" {
+			r.Read(p) // move forward read pointer
+			return d, nil	
 		}
 	}
-	return d, err
 }
 
 func readUntil(r *bufio.Reader, endAt byte) ([]byte, error) {
-	v, b, err := readUntilAny(r, []byte{endAt})
+	v, _, err := readUntilAny(r, []byte{endAt})
 	return v, err
 }
 

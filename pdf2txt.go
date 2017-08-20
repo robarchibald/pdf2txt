@@ -3,6 +3,8 @@ package pdf2txt
 import (
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/EndFirstCorp/pdflib/bufio"
 	"github.com/pkg/errors"
@@ -31,14 +33,27 @@ type pdfDictionary struct {
 	Entries map[string]pdfItem
 }
 
+func (d *pdfDictionary) Length() int {
+	for key, value := range d.Entries {
+		if strings.HasSuffix(key, "/Length") {
+			if data, ok := value.([]string); ok && len(data) > 0 {
+				length, err := strconv.Atoi(data[0])
+				if err != nil {
+					return 0
+				}
+				return length
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
 type pdfStream struct {
 }
 
 type pdfNull struct {
 }
-
-type endDictionary struct{}
-type endArray struct{}
 
 type pdfItem interface{}
 
@@ -60,7 +75,11 @@ func parsePdf(pdf io.Reader) (*pdfDocument, error) {
 	var err error
 	d := &pdfDocument{}
 	for b, err = br.ReadByte(); err == nil; b, err = br.ReadByte() {
-		readNext(b, br)
+		item := readNext(b, br)
+		fmt.Println(item)
+		if err, ok := item.(error); ok {
+			return d, err
+		}
 	}
 	return d, err
 }
@@ -72,7 +91,6 @@ func readNext(b byte, r *bufio.Reader) pdfItem {
 		if err != nil {
 			return err
 		}
-		fmt.Println("string", string(v))
 		return string(v)
 	case '<':
 		n, err := r.Peek(1)
@@ -81,41 +99,45 @@ func readNext(b byte, r *bufio.Reader) pdfItem {
 		}
 		if n[0] == '<' {
 			r.ReadByte()
-			var d *pdfDictionary
-			d, err = readDictionary(r)
+			d, err := readDictionary(r)
 			if err != nil {
 				return err
 			}
-			fmt.Println("dictionary", d)
-			return d
+			if l := d.Length(); l != 0 {
+				fmt.Println("has a length", l)
+				return errors.New("quitting. Try to read stream")
+			}
 		}
 
 		v, err := readUntil(r, '>')
 		if err != nil {
 			return err
 		}
-		fmt.Println("array", string(v))
-		return v
+		return string(v)
 	case '[':
 		v, err := readUntil(r, ']') // make into readArray
 		if err != nil {
 			return err
 		}
-		fmt.Println("array", string(v))
 		return v
 	case '{':
 		v, err := readUntil(r, '}') // possibly make into readCodeStream (even though we're not using data)
 		if err != nil {
 			return err
 		}
-		fmt.Println("codestream", string(v))
 		return v
 	case '/':
-		v, _, err := readName(r)
-		fmt.Println("name", string(v), err)
+		v, err := readName(r)
+		if err != nil {
+			return nil
+		}
+		return v
 	case '%':
 		v, _, err := readUntilAny(r, eolChars) // make into readComment
-		fmt.Println("comment", string(v), err)
+		if err != nil {
+			return err
+		}
+		return string(v)
 	case '\x00', '\t', '\f', ' ', '\n', '\r':
 		err := skipSpaces(r)
 		next, err := r.ReadByte()
@@ -124,37 +146,12 @@ func readNext(b byte, r *bufio.Reader) pdfItem {
 		}
 		return readNext(next, r)
 	default:
-		tokens := []string{}
-		r.UnreadByte() // want to include first byte in token
-		for {
-			tok, next, err := readUntilAny(r, delimChars)
-			if err != nil {
-				break
-			}
-			tokens = append(tokens, string(tok))
-
-			if isWhitespace(next) {
-				err = skipSpaces(r)
-				if err != nil {
-					break
-				}
-			} else if isDelimiter(next) {
-				break
-			}
-
-			// quit if we've run out of regular tokens
-			p, err := r.Peek(1)
-			if err != nil {
-				return err
-			}
-			if !isRegular(p[0]) {
-				break
-			}
+		tokens, err := readTokens(r)
+		if err != nil {
+			return err
 		}
-		fmt.Println("tokens", tokens)
 		return tokens
 	}
-	return nil
 }
 
 func isEOL(b byte) bool {
@@ -174,23 +171,29 @@ func isRegular(b byte) bool {
 	return !isWhitespace(b) && !isDelimiter(b)
 }
 
-func readName(r *bufio.Reader) ([]byte, byte, error) {
-	endChars := append(spaceChars, '[', '(', '<', '%')
+func readName(r *bufio.Reader) ([]byte, error) {
+	endChars := append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '%') // any except /
 	v, end, err := readUntilAny(r, endChars)
 	if err != nil {
-		return nil, end, err
+		return nil, err
+	}
+	if isDelimiter(end) {
+		r.UnreadByte() // back out the delimiter
 	}
 	if len(v) > 0 && v[0] != '/' { // start with '/ no matter what
 		v = append([]byte{'/'}, v...)
 	}
-	fmt.Println("name", string(v), err)
-	return v, end, nil
+	return v, err
 }
 
 func readDictionary(r *bufio.Reader) (*pdfDictionary, error) {
 	d := &pdfDictionary{Entries: make(map[string]pdfItem)}
 	for {
-		name, b, err := readName(r)
+		name, err := readName(r)
+		if err != nil {
+			return nil, err
+		}
+		b, err := r.ReadByte()
 		if err != nil {
 			return nil, err
 		}
@@ -208,6 +211,38 @@ func readDictionary(r *bufio.Reader) (*pdfDictionary, error) {
 			return d, nil
 		}
 	}
+}
+
+func readTokens(r *bufio.Reader) ([]string, error) {
+	tokens := []string{}
+	r.UnreadByte() // want to include first byte in token
+	for {
+		tok, next, err := readUntilAny(r, delimChars)
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, string(tok))
+
+		if isWhitespace(next) {
+			err = skipSpaces(r)
+			if err != nil {
+				return nil, err
+			}
+		} else if isDelimiter(next) {
+			r.UnreadByte() // back out delimiter
+			break
+		}
+
+		// quit if we've run out of regular tokens
+		p, err := r.Peek(1)
+		if err != nil {
+			return nil, err
+		}
+		if !isRegular(p[0]) {
+			break
+		}
+	}
+	return tokens, nil
 }
 
 func readUntil(r *bufio.Reader, endAt byte) ([]byte, error) {

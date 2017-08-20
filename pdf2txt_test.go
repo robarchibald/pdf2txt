@@ -11,7 +11,7 @@ import (
 }*/
 
 func TestParse(t *testing.T) {
-	f, err := os.Open(`testData/simple.pdf`)
+	f, err := os.Open(`testData/stream.pdf`)
 	t.Log(err)
 	_, err = parsePdf(f)
 	if err != nil {

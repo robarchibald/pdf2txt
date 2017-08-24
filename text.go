@@ -13,28 +13,27 @@ type page struct {
 // contained in the PDF file.
 func Text(r io.Reader) (io.Reader, error) {
 	tchan := make(chan interface{}, 15)
-	go Tokenize(r, tchan)
+	go Tokenize(newBufReader(r), tchan)
 
 	for t := range tchan {
 		switch v := t.(type) {
-		case comment:
-			fmt.Println("comment", v)
-		case dictionary:
-			fmt.Println("dictionary", v)
 		case text:
 			fmt.Println("text", v)
 		case array:
 			fmt.Println("array", v)
 		case hexdata:
 			fmt.Println("hexdata", v)
-		case object:
+		case *object:
 			fmt.Println("object", v)
 			if v.hasTextStream() {
 				schan := make(chan interface{})
-				go Tokenize(v.stream, schan)
+				go Tokenize(newMemReader(v.stream), schan)
 				count := 0
 				for t := range schan {
 					fmt.Printf("%d - %T |%v|\n", count, t, t)
+					if t == nil {
+
+					}
 					count++
 				}
 			}

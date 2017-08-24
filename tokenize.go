@@ -1,7 +1,6 @@
 package pdf2txt
 
 import (
-	"bufio"
 	"bytes"
 	"compress/zlib"
 	"fmt"
@@ -22,6 +21,7 @@ type name string
 type codestream string
 type token string
 type null bool
+type end byte
 type xref []xrefItem
 type cmap map[hexdata]string
 type objectref struct {
@@ -41,6 +41,11 @@ type xrefItem struct {
 	byteOffset int
 	generation int
 	xrefType   string
+}
+type textsection struct {
+	fontName  string
+	textArray array
+	text      text
 }
 
 var spaceChars = []byte{'\x00', '\t', '\f', ' ', '\n', '\r'}
@@ -64,15 +69,12 @@ var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/',
 //   - objectref     : three subsequent tokens "x x R" or "x x obj" (e.g. 250 0 obj)
 //   - textsection   : from BT to ET
 //   - cmap          : from begincmap to endcmap
-func Tokenize(pdf io.Reader, tChan chan interface{}) {
-	br := bufio.NewReader(pdf)
-	var b byte
+func Tokenize(r peekingReader, tChan chan interface{}) {
 	var err error
 	var ok bool
 
-	count := 0
-	for b, err = br.ReadByte(); err == nil; b, err = br.ReadByte() {
-		item := readNext(b, br)
+	for {
+		item := readNext(r)
 		if err, ok = item.(error); ok {
 			break
 		}
@@ -80,7 +82,7 @@ func Tokenize(pdf io.Reader, tChan chan interface{}) {
 		// read an object
 		if oref, ok := item.(*objectref); ok && oref.refType == "obj" {
 			var obj *object
-			obj, err = readObject(br, pdf, oref)
+			obj, err = readObject(r, oref)
 			if err != nil {
 				break
 			}
@@ -93,26 +95,31 @@ func Tokenize(pdf io.Reader, tChan chan interface{}) {
 			switch tok {
 			case "xref":
 				var xref xref
-				xref, err = readXref(b, br)
+				xref, err = readXref(r)
 				if err != nil {
 					break
 				}
 				tChan <- xref
 				continue
 			case "BT":
-				fmt.Println("handle text")
+				var textsection *textsection
+				textsection, err = readTextSection(r)
+				if err != nil {
+					break
+				}
+				tChan <- textsection
 			case "begincmap":
-				readCmap(br)
+				var cmap cmap
+				cmap, err = readCmap(r)
+				if err != nil {
+					break
+				}
+				tChan <- cmap
 				continue
 			}
 		}
 		tChan <- item
 
-		if count >= 3000 {
-			tChan <- errors.New("looks like infinite loop. exiting")
-			break
-		}
-		count++
 	}
 	if err != nil {
 		tChan <- err
@@ -121,12 +128,48 @@ func Tokenize(pdf io.Reader, tChan chan interface{}) {
 	close(tChan)
 }
 
-func readCmap(r *bufio.Reader) (cmap, error) {
+func readTextSection(r peekingReader) (*textsection, error) {
+	t := &textsection{}
+	//stack := stack{}
+
+	for {
+		item := readNext(r)
+		if err, ok := item.(error); ok {
+			return nil, err
+		}
+
+		if tok, ok := item.(token); ok {
+			switch tok {
+			/*case "Tf":
+				stack.Pop() // font size
+				if name, ok := stack.Pop().(name); ok {
+					t.fontName = string(name)
+				}
+				continue
+			case "TJ":
+				if textArray, ok := stack.Pop().(array); ok {
+					t.textArray = textArray
+				}
+				continue
+			case "Tj":
+				if text, ok := stack.Pop().(text); ok {
+					t.text = text
+				}
+				continue*/
+			case "ET":
+				return t, nil
+			}
+		}
+		//stack.Push(item)
+	}
+}
+
+func readCmap(r peekingReader) (cmap, error) {
 	cmap := make(cmap)
 	var prev interface{}
 
-	for b, err := r.ReadByte(); err == nil; b, err = r.ReadByte() {
-		item := readNext(b, r)
+	for {
+		item := readNext(r)
 		if err, ok := item.(error); ok {
 			return nil, err
 		}
@@ -151,19 +194,14 @@ func readCmap(r *bufio.Reader) (cmap, error) {
 		}
 		prev = item
 	}
-	return nil, errors.New("didn't expect to get here")
 }
 
-func readbfchar(r *bufio.Reader, length token) (cmap, error) {
+func readbfchar(r peekingReader, length token) (cmap, error) {
 	cmap := make(cmap)
 	l, _ := strconv.Atoi(string(length))
 	var lastKey hexdata
 	for i := 0; i < l*2; i++ {
-		b, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		item := readNext(b, r)
+		item := readNext(r)
 		if err, ok := item.(error); ok {
 			return nil, err
 		}
@@ -185,17 +223,13 @@ func readbfchar(r *bufio.Reader, length token) (cmap, error) {
 	return cmap, nil
 }
 
-func readbfrange(r *bufio.Reader, length token) (cmap, error) {
+func readbfrange(r peekingReader, length token) (cmap, error) {
 	cmap := make(cmap)
 	l, _ := strconv.Atoi(string(length))
 	var start, end int64
 	var digits int
 	for i := 0; i < l*3; i++ {
-		b, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		item := readNext(b, r)
+		item := readNext(r)
 		if err, ok := item.(error); ok {
 			return nil, err
 		}
@@ -223,10 +257,10 @@ func readbfrange(r *bufio.Reader, length token) (cmap, error) {
 	return cmap, nil
 }
 
-func readObject(r *bufio.Reader, pdf io.Reader, ref *objectref) (*object, error) {
+func readObject(r peekingReader, ref *objectref) (*object, error) {
 	o := object{number: ref.number, generation: ref.generation}
-	for b, err := r.ReadByte(); err == nil; b, err = r.ReadByte() {
-		item := readNext(b, r)
+	for {
+		item := readNext(r)
 		if err, ok := item.(error); ok {
 			return nil, err
 		}
@@ -235,10 +269,9 @@ func readObject(r *bufio.Reader, pdf io.Reader, ref *objectref) (*object, error)
 			switch tok {
 			case "stream":
 				if l := o.streamLength(); l > 0 {
-					var s stream
-					s, err = readStream(r, pdf, l)
+					s, err := r.ReadBytes(l)
 					if err != nil {
-						break
+						return nil, err
 					}
 					o.setStream(s)
 					continue
@@ -256,16 +289,15 @@ func readObject(r *bufio.Reader, pdf io.Reader, ref *objectref) (*object, error)
 			o.values = append(o.values, item)
 		}
 	}
-	return nil, errors.New("unexpected end")
 }
 
-func readXref(b byte, r *bufio.Reader) (xref, error) {
+func readXref(r peekingReader) (xref, error) {
 	var xrefStart, xrefEnd int
 	var xref xref
 	xrefCount := 1
 
 	for {
-		item := readNext(b, r)
+		item := readNext(r)
 		if err, ok := item.(error); ok {
 			return nil, err
 		}
@@ -300,13 +332,18 @@ func readXref(b byte, r *bufio.Reader) (xref, error) {
 	}
 }
 
-func readNext(b byte, r *bufio.Reader) interface{} {
+func readNext(r peekingReader) interface{} {
+	b, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
 	switch b {
 	case '(':
 		v, err := readUntil(r, ')') // make into readText
 		if err != nil {
 			return err
 		}
+		r.ReadByte()                          // move read pointer past the ')'
 		for bytes.HasSuffix(v, []byte(`\`)) { // ends with escape character so go to next end
 			n, err := readUntil(r, ')')
 			if err != nil {
@@ -334,6 +371,7 @@ func readNext(b byte, r *bufio.Reader) interface{} {
 		if err != nil {
 			return err
 		}
+		r.ReadByte() // move read pointer past the '>'
 		return hexdata(v)
 	case '[':
 		v, err := readArray(r)
@@ -346,16 +384,16 @@ func readNext(b byte, r *bufio.Reader) interface{} {
 		if err != nil {
 			return err
 		}
+		r.ReadByte() // move read pointer past the '}'
 		return codestream(v)
 	case '/':
-		r.UnreadByte() // include the starting slash too
 		v, err := readName(r)
 		if err != nil {
 			return err
 		}
 		return v
 	case '%':
-		v, _, err := readUntilAny(r, eolChars) // make into readComment
+		v, err := readUntilAny(r, eolChars) // make into readComment
 		if err != nil {
 			return err
 		}
@@ -365,23 +403,15 @@ func readNext(b byte, r *bufio.Reader) interface{} {
 		if err != nil {
 			return err
 		}
-		next, err := r.ReadByte()
-		if err != nil {
-			return err
-		}
-		return readNext(next, r)
-	// the only way we should've gotten here is from inside a dictionary calling readNext when there is no value
-	// this is known as the nullValue for pdfs
-	case ')', '>', ']', '}':
-		r.UnreadByte() // get back the end character
-		return null(true)
+		return readNext(r)
+	case ']', ')', '>', '}':
+		return end(b)
 	default:
-		r.UnreadByte() // include first character in token
-		objectref, err := readObjectReference(r)
+		objectref, err := readObjectReference(b, r)
 		if err == nil {
 			return objectref
 		}
-		token, err := readToken(r)
+		token, err := readToken(b, r)
 		if err != nil {
 			return err
 		}
@@ -402,63 +432,30 @@ func isRegular(b byte) bool {
 	return !isWhitespace(b) && !isDelimiter(b)
 }
 
-func readStream(br *bufio.Reader, r io.Reader, length int) (stream, error) {
-	var err error
-	s := make([]byte, length)
-	bSize := br.Buffered()
-	if bSize < length { // pull directly from reader since buffer is too small
-		buf := make([]byte, bSize) // get rest of buffer
-		_, err = br.Read(buf)
-		if err != nil {
-			return nil, err
-		}
-
-		pull := make([]byte, length-bSize) // pull what isn't buffered
-		_, err = r.Read(pull)
-		copy(s[:bSize], buf)
-		copy(s[bSize:], pull)
-		br.Reset(r) // reset buffered reader state
-	} else {
-		_, err = br.Read(s)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func readArray(r *bufio.Reader) (array, error) {
+func readArray(r peekingReader) (array, error) {
 	items := array{}
 	for {
-		b, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		if b == ']' {
-			return items, nil
-		}
-		item := readNext(b, r)
+		item := readNext(r)
 		if err, ok := item.(error); ok {
 			return nil, errors.Wrap(err, fmt.Sprintf("error while reading array item"))
 		}
-		if item == null(true) && (b == '>' || b == ')' || b == ']' || b == '}') {
-			r.ReadByte()
-			fmt.Println("bad place. skipping character or we'll be in infinte loop")
+		if end, ok := item.(end); ok && end == ']' {
+			return items, nil
 		}
 		items = append(items, item)
 	}
 }
 
-func readName(r *bufio.Reader) (name, error) {
+func readName(r peekingReader) (name, error) {
 	endChars := append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '%') // any except /
-	v, end, err := readUntilAny(r, endChars)
+	v, err := readUntilAny(r, endChars)
 	if err != nil {
-		return "", err
+		return "\x00", err
 	}
-	if isDelimiter(end) {
-		r.UnreadByte() // back out the delimiter
+	if !bytes.HasPrefix(v, []byte{'/'}) { // include leading '/' if not included
+		v = append([]byte{'/'}, v...)
 	}
+
 	return name(v), err
 }
 
@@ -483,7 +480,9 @@ func (o *object) hasTextStream() bool {
 		return false
 	}
 	for key := range o.dict {
-		if strings.Contains(string(key), "XObject") || strings.Contains(string(key), "Image") {
+		if o.number == 12 || o.number == 250 || o.number == 254 || o.number == 256 || o.number == 258 || o.number == 262 ||
+			o.number == 264 || o.number == 268 || o.number == 270 || o.number == 272 || o.number == 276 || o.number == 277 ||
+			strings.Contains(string(key), "XObject") || strings.Contains(string(key), "Image") || strings.Contains(string(key), "Metadata") || strings.Contains(string(key), "XML") || strings.Contains(string(key), "XRef") {
 			return false
 		}
 	}
@@ -496,7 +495,7 @@ func (o *object) setStream(s stream) error {
 		items := strings.Split(name, "/")
 		for _, decode := range items {
 			if !strings.Contains(string(key), "Decode") && !strings.Contains(string(key), "Crypt") {
-				continue
+				o.stream = bytes.NewBuffer(s)
 			}
 
 			switch decode {
@@ -524,20 +523,22 @@ func (o *object) setStream(s stream) error {
 	return nil
 }
 
-func readDictionary(r *bufio.Reader) (dictionary, error) {
+func readDictionary(r peekingReader) (dictionary, error) {
 	d := make(dictionary)
 	for {
 		name, err := readName(r)
 		if err != nil {
 			return nil, err
 		}
-		b, err := r.ReadByte()
-		if err != nil {
+
+		item := readNext(r)
+		if err, ok := item.(error); ok {
 			return nil, err
 		}
-		item := readNext(b, r)
-		if err, ok := item.(error); ok {
-			return nil, errors.Wrap(err, fmt.Sprintf("error while reading from %s", name))
+		if end, ok := item.(end); ok && end == '>' {
+			d[name] = null(true)
+			r.ReadByte() // skip the second '>' too
+			return d, nil
 		}
 		d[name] = item
 
@@ -550,25 +551,26 @@ func readDictionary(r *bufio.Reader) (dictionary, error) {
 			return d, err
 		}
 		if string(p) == ">>" {
-			r.Read(p) // move forward read pointer
+			r.ReadBytes(2) // move forward read pointer
 			return d, nil
 		}
 	}
 }
 
-func readObjectReference(r *bufio.Reader) (*objectref, error) {
+func readObjectReference(b byte, r peekingReader) (*objectref, error) {
 	// the VAST majority of object references are just 9 bytes long. We'll get 12 bytes to be sure
 	// number     - 3 digits (allows up to 999 objects)
 	// generation - 1 digit (up to 9 generations)
 	// R or obj   - 3 digits max
 	// spaces     - 2
-	buf, err := r.Peek(12)
+	var cur bytes.Buffer
+	cur.WriteByte(b) // add first character to the current token
+	buf, err := r.Peek(11)
 	if err != nil {
 		return nil, err
 	}
 
 	tokens := []token{}
-	var cur bytes.Buffer
 	var bytesUsed = 0
 	for _, b := range buf {
 		bytesUsed++
@@ -598,21 +600,26 @@ func readObjectReference(r *bufio.Reader) (*objectref, error) {
 		if err != nil {
 			return nil, err
 		}
-		r.Read(make([]byte, bytesUsed)) // consume the bytes we used in the object reference
+		r.ReadBytes(bytesUsed) // consume the bytes we used in the object reference
 		return &objectref{number: number, generation: generation, refType: string(tokens[2])}, nil
 	}
 	return nil, errors.New("invalid object reference")
 }
 
-func readToken(r *bufio.Reader) (token, error) {
-	tok, next, err := readUntilAny(r, delimChars)
+func readToken(b byte, r peekingReader) (token, error) {
+	tok, err := readUntilAny(r, delimChars)
 	if err != nil {
 		return "\x00", err
 	}
+	tok = append([]byte{b}, tok...)
 
 	if string(tok) == "stream" { // special case for stream
+		next, err := r.ReadByte()
+		if err != nil {
+			return "\x00", err
+		}
 		if next == '\r' { // EOL is \r, so take \n as well (section 3.2.7)
-			next, err := r.ReadByte()
+			next, err = r.ReadByte()
 			if err != nil {
 				return "\x00", err
 			}
@@ -622,8 +629,5 @@ func readToken(r *bufio.Reader) (token, error) {
 		}
 	}
 
-	if isDelimiter(next) {
-		r.UnreadByte() // back out delimiter
-	}
 	return token(tok), nil
 }

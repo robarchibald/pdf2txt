@@ -6,7 +6,7 @@ import (
 )
 
 func TestText(t *testing.T) {
-	f, _ := os.Open(`testData/132_0.txt`)
+	f, _ := os.Open(`testData/Kicker.pdf`)
 
 	Text(f)
 }

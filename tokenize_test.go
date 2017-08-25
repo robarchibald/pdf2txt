@@ -1,7 +1,6 @@
 package pdf2txt
 
 import (
-	"fmt"
 	"os"
 	"testing"
 )
@@ -19,7 +18,10 @@ func TestTokenize(t *testing.T) {
 
 	count := 0
 	for c := range tChan {
-		fmt.Printf("%d - %T |%v|\n", count, c, c)
+		//fmt.Printf("%d - %T |%v|\n", count, c, c)
+		if c != nil {
+
+		}
 		count++
 	}
 }
@@ -32,7 +34,10 @@ func TestBinaryTokenize(t *testing.T) {
 
 	count := 0
 	for c := range tChan {
-		fmt.Printf("%d - %T |%v|\n", count, c, c)
+		//fmt.Printf("%d - %T |%v|\n", count, c, c)
+		if c != nil {
+
+		}
 		count++
 	}
 }
@@ -45,7 +50,10 @@ func TestTextTokenize(t *testing.T) {
 
 	count := 0
 	for c := range tChan {
-		fmt.Printf("%d - %T |%v|\n", count, c, c)
+		//fmt.Printf("%d - %T |%v|\n", count, c, c)
+		if c != nil {
+
+		}
 		count++
 	}
 }
@@ -58,7 +66,10 @@ func TestCmapTokenize(t *testing.T) {
 
 	count := 0
 	for c := range tChan {
-		fmt.Printf("%d - %T |%v|\n", count, c, c)
+		//fmt.Printf("%d - %T |%v|\n", count, c, c)
+		if c != nil {
+
+		}
 		count++
 	}
 }

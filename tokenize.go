@@ -71,33 +71,34 @@ var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/',
 //   - cmap          : from begincmap to endcmap
 func Tokenize(r peekingReader, tChan chan interface{}) {
 	var err error
-	var ok bool
 
+Loop:
 	for {
 		item := readNext(r)
-		if err, ok = item.(error); ok {
-			break
-		}
 
-		// read an object
-		if oref, ok := item.(*objectref); ok && oref.refType == "obj" {
-			var obj *object
-			obj, err = readObject(r, oref)
-			if err != nil {
-				break
+		switch v := item.(type) {
+		case error:
+			err = v
+			break Loop
+
+		case *objectref:
+			if v.refType == "obj" {
+				var obj *object
+				obj, err = readObject(r, v)
+				if err != nil {
+					break Loop
+				}
+				tChan <- obj
+				continue
 			}
-			tChan <- obj
-			continue
-		}
 
-		// handle xref section
-		if tok, ok := item.(token); ok {
-			switch tok {
+		case token:
+			switch v {
 			case "xref":
 				var xref xref
 				xref, err = readXref(r)
 				if err != nil {
-					break
+					break Loop
 				}
 				tChan <- xref
 				continue
@@ -105,24 +106,21 @@ func Tokenize(r peekingReader, tChan chan interface{}) {
 				var textsection *textsection
 				textsection, err = readTextSection(r)
 				if err != nil {
-					break
+					break Loop
 				}
 				tChan <- textsection
+				continue
 			case "begincmap":
 				var cmap cmap
 				cmap, err = readCmap(r)
 				if err != nil {
-					break
+					break Loop
 				}
 				tChan <- cmap
 				continue
 			}
 		}
 		tChan <- item
-
-	}
-	if err != nil {
-		tChan <- err
 	}
 
 	close(tChan)
@@ -130,17 +128,17 @@ func Tokenize(r peekingReader, tChan chan interface{}) {
 
 func readTextSection(r peekingReader) (*textsection, error) {
 	t := &textsection{}
-	//stack := stack{}
+	stack := stack{}
 
 	for {
 		item := readNext(r)
-		if err, ok := item.(error); ok {
-			return nil, err
-		}
+		switch v := item.(type) {
+		case error:
+			return nil, v
 
-		if tok, ok := item.(token); ok {
-			switch tok {
-			/*case "Tf":
+		case token:
+			switch v {
+			case "Tf":
 				stack.Pop() // font size
 				if name, ok := stack.Pop().(name); ok {
 					t.fontName = string(name)
@@ -155,12 +153,12 @@ func readTextSection(r peekingReader) (*textsection, error) {
 				if text, ok := stack.Pop().(text); ok {
 					t.text = text
 				}
-				continue*/
+				continue
 			case "ET":
 				return t, nil
 			}
 		}
-		//stack.Push(item)
+		stack.Push(item)
 	}
 }
 
@@ -170,12 +168,12 @@ func readCmap(r peekingReader) (cmap, error) {
 
 	for {
 		item := readNext(r)
-		if err, ok := item.(error); ok {
-			return nil, err
-		}
+		switch v := item.(type) {
+		case error:
+			return nil, v
 
-		if tok, ok := item.(token); ok {
-			switch tok {
+		case token:
+			switch v {
 			case "begincodespacerange":
 				length, _ := strconv.Atoi(string(prev.(token)))
 				for i := 0; i < length*2; i++ {
@@ -183,12 +181,21 @@ func readCmap(r peekingReader) (cmap, error) {
 				}
 			case "beginbfchar":
 				cmap, err := readbfchar(r, prev.(token))
-				fmt.Println("bfchar", cmap, err)
+				if err != nil {
+					return nil, err
+				}
+				if cmap != nil {
+
+				}
 			case "beginbfrange":
 				cmap, err := readbfrange(r, prev.(token))
-				fmt.Println("bfrange", cmap, err)
+				if err != nil {
+					return nil, err
+				}
+				if cmap != nil {
+
+				}
 			case "endcmap":
-				fmt.Println("end cmap")
 				return cmap, nil
 			}
 		}
@@ -202,21 +209,22 @@ func readbfchar(r peekingReader, length token) (cmap, error) {
 	var lastKey hexdata
 	for i := 0; i < l*2; i++ {
 		item := readNext(r)
-		if err, ok := item.(error); ok {
-			return nil, err
-		}
+		switch v := item.(type) {
+		case error:
+			return nil, v
 
-		if data, ok := item.(hexdata); ok {
+		case hexdata:
 			switch i % 2 {
 			case 0: // first item is the key
-				lastKey = data
-				cmap[data] = ""
+				lastKey = v
+				cmap[v] = ""
 			case 1: // second item is the value
-				num, _ := strconv.ParseInt(string(data), 16, 16)
+				num, _ := strconv.ParseInt(string(v), 16, 16)
 				repl := fmt.Sprintf("%c", num)
 				cmap[lastKey] = repl
 			}
-		} else {
+
+		default:
 			return nil, errors.New("invalid bfchar data")
 		}
 	}
@@ -228,21 +236,22 @@ func readbfrange(r peekingReader, length token) (cmap, error) {
 	l, _ := strconv.Atoi(string(length))
 	var start, end int64
 	var digits int
+
 	for i := 0; i < l*3; i++ {
 		item := readNext(r)
-		if err, ok := item.(error); ok {
-			return nil, err
-		}
+		switch v := item.(type) {
+		case error:
+			return nil, v
 
-		if data, ok := item.(hexdata); ok {
+		case hexdata:
 			switch i % 3 {
 			case 0: // range start
-				digits = len(string(data))
-				start, _ = strconv.ParseInt(string(data), 16, 16)
+				digits = len(string(v))
+				start, _ = strconv.ParseInt(string(v), 16, 16)
 			case 1: // range end
-				end, _ = strconv.ParseInt(string(data), 16, 16)
+				end, _ = strconv.ParseInt(string(v), 16, 16)
 			case 2: // values
-				repl, _ := strconv.ParseInt(string(data), 16, 16)
+				repl, _ := strconv.ParseInt(string(v), 16, 16)
 				var count int64
 				for i := start; i <= end; i++ {
 					format := fmt.Sprintf("%%0%dx", digits) // format for however many digits we originally had
@@ -250,7 +259,8 @@ func readbfrange(r peekingReader, length token) (cmap, error) {
 					count++
 				}
 			}
-		} else {
+
+		default:
 			return nil, errors.New("invalid bfrange data")
 		}
 	}
@@ -261,12 +271,12 @@ func readObject(r peekingReader, ref *objectref) (*object, error) {
 	o := object{number: ref.number, generation: ref.generation}
 	for {
 		item := readNext(r)
-		if err, ok := item.(error); ok {
-			return nil, err
-		}
+		switch v := item.(type) {
+		case error:
+			return nil, v
 
-		if tok, ok := item.(token); ok {
-			switch tok {
+		case token:
+			switch v {
 			case "stream":
 				if l := o.streamLength(); l > 0 {
 					s, err := r.ReadBytes(l)
@@ -298,28 +308,28 @@ func readXref(r peekingReader) (xref, error) {
 
 	for {
 		item := readNext(r)
-		if err, ok := item.(error); ok {
-			return nil, err
-		}
+		switch v := item.(type) {
+		case error:
+			return nil, v
 
-		if tok, ok := item.(token); ok {
+		case token:
 			if xrefCount == 1 {
-				xrefStart, _ = strconv.Atoi(string(tok))
+				xrefStart, _ = strconv.Atoi(string(v))
 			} else if xrefCount == 2 {
-				xrefEnd, _ = strconv.Atoi(string(tok))
+				xrefEnd, _ = strconv.Atoi(string(v))
 				xref = make([]xrefItem, xrefEnd-xrefStart)
 			} else if xrefCount >= 3 {
 				rowNum := xrefCount/3 - 1
 				switch xrefCount % 3 {
 				case 0: // byte offset
-					byteOffset, _ := strconv.Atoi(string(tok))
+					byteOffset, _ := strconv.Atoi(string(v))
 					xref[rowNum].byteOffset = byteOffset
 					xref[rowNum].number = xrefStart + rowNum
 				case 1: // generation number
-					generation, _ := strconv.Atoi(string(tok))
+					generation, _ := strconv.Atoi(string(v))
 					xref[rowNum].generation = generation
 				case 2: // xref type
-					xref[rowNum].xrefType = string(tok)
+					xref[rowNum].xrefType = string(v)
 				}
 			}
 		}

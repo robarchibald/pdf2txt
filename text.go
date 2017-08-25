@@ -24,13 +24,13 @@ func Text(r io.Reader) (io.Reader, error) {
 		case hexdata:
 			fmt.Println("hexdata", v)
 		case *object:
-			fmt.Println("object", v)
+			//fmt.Println("object", v)
 			if v.hasTextStream() {
 				schan := make(chan interface{})
 				go Tokenize(newMemReader(v.stream), schan)
 				count := 0
 				for t := range schan {
-					fmt.Printf("%d - %T |%v|\n", count, t, t)
+					//					fmt.Printf("%d - %T |%v|\n", count, t, t)
 					if t == nil {
 
 					}

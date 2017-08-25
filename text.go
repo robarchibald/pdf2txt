@@ -30,7 +30,7 @@ func Text(r io.Reader) (io.Reader, error) {
 				go Tokenize(newMemReader(v.stream), schan)
 				count := 0
 				for t := range schan {
-					//					fmt.Printf("%d - %T |%v|\n", count, t, t)
+					//fmt.Printf("%d - %T |%v|\n", count, t, t)
 					if t == nil {
 
 					}

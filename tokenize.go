@@ -43,7 +43,7 @@ type xrefItem struct {
 	xrefType   string
 }
 type textsection struct {
-	fontName  string
+	fontName  name
 	textArray array
 	text      text
 }
@@ -71,6 +71,7 @@ var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/',
 //   - cmap          : from begincmap to endcmap
 func Tokenize(r peekingReader, tChan chan interface{}) {
 	var err error
+	items := stack{}
 
 Loop:
 	for {
@@ -81,46 +82,62 @@ Loop:
 			err = v
 			break Loop
 
-		case *objectref:
-			if v.refType == "obj" {
+		case token:
+			switch v {
+			case "obj":
+				var oref *objectref
+				gen := items.Pop()
+				num := items.Pop()
+				oref, err = newObjectref(num, gen, v)
+				if err != nil { // couln't get object reference, so just continue as a token
+					items.Push(v)
+					break // only break from switch, not loop
+				}
+
 				var obj *object
-				obj, err = readObject(r, v)
+				obj, err = readObject(r, oref)
 				if err != nil {
 					break Loop
 				}
-				tChan <- obj
-				continue
-			}
-
-		case token:
-			switch v {
+				items.Push(obj)
 			case "xref":
 				var xref xref
 				xref, err = readXref(r)
 				if err != nil {
 					break Loop
 				}
-				tChan <- xref
-				continue
+				items.Push(xref)
 			case "BT":
 				var textsection *textsection
 				textsection, err = readTextSection(r)
 				if err != nil {
 					break Loop
 				}
-				tChan <- textsection
-				continue
+				items.Push(textsection)
 			case "begincmap":
 				var cmap cmap
 				cmap, err = readCmap(r)
 				if err != nil {
 					break Loop
 				}
-				tChan <- cmap
-				continue
+				items.Push(cmap)
+			default: // send out other tokens
+				items.Push(v)
 			}
+
+		default: // send out other item types
+			items.Push(item)
 		}
-		tChan <- item
+		if items.Len() > 2 { // use a stack so we can look for object reference
+			tChan <- items.LPop()
+		}
+	}
+	var l = items.Len()
+	for i := 0; i < l; i++ {
+		tChan <- items.Pop()
+	}
+	if err != nil {
+		tChan <- err
 	}
 
 	close(tChan)
@@ -141,7 +158,7 @@ func readTextSection(r peekingReader) (*textsection, error) {
 			case "Tf":
 				stack.Pop() // font size
 				if name, ok := stack.Pop().(name); ok {
-					t.fontName = string(name)
+					t.fontName = name
 				}
 				continue
 			case "TJ":
@@ -164,7 +181,7 @@ func readTextSection(r peekingReader) (*textsection, error) {
 
 func readCmap(r peekingReader) (cmap, error) {
 	cmap := make(cmap)
-	var prev interface{}
+	var prev token
 
 	for {
 		item := readNext(r)
@@ -175,12 +192,12 @@ func readCmap(r peekingReader) (cmap, error) {
 		case token:
 			switch v {
 			case "begincodespacerange":
-				length, _ := strconv.Atoi(string(prev.(token)))
+				length, _ := strconv.Atoi(string(prev))
 				for i := 0; i < length*2; i++ {
 
 				}
 			case "beginbfchar":
-				cmap, err := readbfchar(r, prev.(token))
+				cmap, err := readbfchar(r, prev)
 				if err != nil {
 					return nil, err
 				}
@@ -188,7 +205,7 @@ func readCmap(r peekingReader) (cmap, error) {
 
 				}
 			case "beginbfrange":
-				cmap, err := readbfrange(r, prev.(token))
+				cmap, err := readbfrange(r, prev)
 				if err != nil {
 					return nil, err
 				}
@@ -197,9 +214,10 @@ func readCmap(r peekingReader) (cmap, error) {
 				}
 			case "endcmap":
 				return cmap, nil
+			default:
+				prev = v
 			}
 		}
-		prev = item
 	}
 }
 
@@ -417,10 +435,6 @@ func readNext(r peekingReader) interface{} {
 	case ']', ')', '>', '}':
 		return end(b)
 	default:
-		objectref, err := readObjectReference(b, r)
-		if err == nil {
-			return objectref
-		}
 		token, err := readToken(b, r)
 		if err != nil {
 			return err
@@ -567,53 +581,26 @@ func readDictionary(r peekingReader) (dictionary, error) {
 	}
 }
 
-func readObjectReference(b byte, r peekingReader) (*objectref, error) {
-	// the VAST majority of object references are just 9 bytes long. We'll get 12 bytes to be sure
-	// number     - 3 digits (allows up to 999 objects)
-	// generation - 1 digit (up to 9 generations)
-	// R or obj   - 3 digits max
-	// spaces     - 2
-	var cur bytes.Buffer
-	cur.WriteByte(b) // add first character to the current token
-	buf, err := r.Peek(11)
+func newObjectref(number interface{}, generation interface{}, refType token) (*objectref, error) {
+	var err = errors.New("unable to generate object reference")
+	num, ok := number.(token)
+	if !ok {
+		return nil, err
+	}
+	n, err := strconv.Atoi(string(num))
 	if err != nil {
 		return nil, err
 	}
 
-	tokens := []token{}
-	var bytesUsed = 0
-	for _, b := range buf {
-		bytesUsed++
-		if isRegular(b) {
-			cur.WriteByte(b)
-		} else {
-			if cur.Len() > 0 {
-				tokens = append(tokens, token(cur.Bytes()))
-				cur.Reset()
-			}
-
-			if isDelimiter(b) { // we've gone as far as we can
-				bytesUsed-- // don't count delimiter in bytes used
-				break
-			}
-			if len(tokens) == 3 {
-				break
-			}
-		}
+	gen, ok := generation.(token)
+	if !ok {
+		return nil, err
 	}
-	if len(tokens) >= 3 && (tokens[2] == "R" || tokens[2] == "obj") {
-		number, err := strconv.Atoi(string(tokens[0]))
-		if err != nil {
-			return nil, err
-		}
-		generation, err := strconv.Atoi(string(tokens[1]))
-		if err != nil {
-			return nil, err
-		}
-		r.ReadBytes(bytesUsed) // consume the bytes we used in the object reference
-		return &objectref{number: number, generation: generation, refType: string(tokens[2])}, nil
+	g, err := strconv.Atoi(string(gen))
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("invalid object reference")
+	return &objectref{number: n, generation: g, refType: string(refType)}, nil
 }
 
 func readToken(b byte, r peekingReader) (token, error) {

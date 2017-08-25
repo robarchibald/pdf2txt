@@ -100,20 +100,6 @@ Loop:
 					break Loop
 				}
 				tChan <- xref
-			case "BT":
-				var textsection *textsection
-				textsection, err = readTextSection(r)
-				if err != nil {
-					break Loop
-				}
-				tChan <- textsection
-			case "begincmap":
-				var cmap cmap
-				cmap, err = readCmap(r)
-				if err != nil {
-					break Loop
-				}
-				tChan <- cmap
 			default: // send out other tokens
 				tChan <- v
 			}
@@ -127,148 +113,6 @@ Loop:
 	}
 
 	close(tChan)
-}
-
-func readTextSection(r peekingReader) (*textsection, error) {
-	t := &textsection{}
-	stack := stack{}
-
-	for {
-		item := readNext(r)
-		switch v := item.(type) {
-		case error:
-			return nil, v
-
-		case token:
-			switch v {
-			case "Tf":
-				stack.Pop() // font size
-				if name, ok := stack.Pop().(name); ok {
-					t.fontName = name
-				}
-				continue
-			case "TJ":
-				if textArray, ok := stack.Pop().(array); ok {
-					t.textArray = textArray
-				}
-				continue
-			case "Tj":
-				if text, ok := stack.Pop().(text); ok {
-					t.text = text
-				}
-				continue
-			case "ET":
-				return t, nil
-			}
-		}
-		stack.Push(item)
-	}
-}
-
-func readCmap(r peekingReader) (cmap, error) {
-	cmap := make(cmap)
-	var prev token
-
-	for {
-		item := readNext(r)
-		switch v := item.(type) {
-		case error:
-			return nil, v
-
-		case token:
-			switch v {
-			case "begincodespacerange":
-				length, _ := strconv.Atoi(string(prev))
-				for i := 0; i < length*2; i++ {
-
-				}
-			case "beginbfchar":
-				cmap, err := readbfchar(r, prev)
-				if err != nil {
-					return nil, err
-				}
-				if cmap != nil {
-
-				}
-			case "beginbfrange":
-				cmap, err := readbfrange(r, prev)
-				if err != nil {
-					return nil, err
-				}
-				if cmap != nil {
-
-				}
-			case "endcmap":
-				return cmap, nil
-			default:
-				prev = v
-			}
-		}
-	}
-}
-
-func readbfchar(r peekingReader, length token) (cmap, error) {
-	cmap := make(cmap)
-	l, _ := strconv.Atoi(string(length))
-	var lastKey hexdata
-	for i := 0; i < l*2; i++ {
-		item := readNext(r)
-		switch v := item.(type) {
-		case error:
-			return nil, v
-
-		case hexdata:
-			switch i % 2 {
-			case 0: // first item is the key
-				lastKey = v
-				cmap[v] = ""
-			case 1: // second item is the value
-				num, _ := strconv.ParseInt(string(v), 16, 16)
-				repl := fmt.Sprintf("%c", num)
-				cmap[lastKey] = repl
-			}
-
-		default:
-			return nil, errors.New("invalid bfchar data")
-		}
-	}
-	return cmap, nil
-}
-
-func readbfrange(r peekingReader, length token) (cmap, error) {
-	cmap := make(cmap)
-	l, _ := strconv.Atoi(string(length))
-	var start, end int64
-	var digits int
-
-	for i := 0; i < l*3; i++ {
-		item := readNext(r)
-		switch v := item.(type) {
-		case error:
-			return nil, v
-
-		case hexdata:
-			switch i % 3 {
-			case 0: // range start
-				digits = len(string(v))
-				start, _ = strconv.ParseInt(string(v), 16, 16)
-			case 1: // range end
-				end, _ = strconv.ParseInt(string(v), 16, 16)
-			case 2: // values
-				repl, _ := strconv.ParseInt(string(v), 16, 16)
-				var count int64
-				for i := start; i <= end; i++ {
-					format := fmt.Sprintf("%%0%dx", digits) // format for however many digits we originally had
-					cmap[hexdata(strings.ToUpper(fmt.Sprintf(format, i)))] = fmt.Sprintf("%c", repl+count)
-					count++
-				}
-			}
-
-		default:
-			return nil, errors.New("invalid bfrange data")
-		}
-	}
-	return cmap, nil
 }
 
 func readObject(r peekingReader, ref *objectref) (*object, error) {
@@ -460,8 +304,14 @@ func readArray(r peekingReader) (array, error) {
 }
 
 func readName(r peekingReader) (name, error) {
-	endChars := append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '%') // any except /
-	v, err := readUntilAny(r, endChars)
+	p, err := r.Peek(1)
+	if err != nil {
+		return "\x00", err
+	}
+	if p[0] == '/' {
+		r.ReadByte() // read past first '/'
+	}
+	v, err := readUntilAny(r, delimChars)
 	if err != nil {
 		return "\x00", err
 	}
@@ -472,32 +322,58 @@ func readName(r peekingReader) (name, error) {
 	return name(v), err
 }
 
-func (o *object) streamLength() int {
-	for key, value := range o.dict {
-		if strings.HasSuffix(string(key), "/Length") {
-			if data, ok := value.(token); ok && len(data) > 0 {
-				length, err := strconv.Atoi(string(data))
-				if err != nil {
-					return 0
-				}
-				return length
-			}
+func (o *object) objectref(name name) *objectref {
+	if oref, ok := o.search(name).(*objectref); ok {
+		return oref
+	}
+	return nil
+}
+
+func (o *object) name(n name) name {
+	if v, ok := o.search(n).(name); ok {
+		return v
+	}
+	return "\x00"
+}
+
+func (o *object) int(n name) int {
+	if v, ok := o.search(n).(token); ok {
+		i, err := strconv.Atoi(string(v))
+		if err != nil {
 			return 0
 		}
+		return i
 	}
 	return 0
+}
+
+func (o *object) search(name name) interface{} {
+	if o.dict == nil {
+		return nil
+	}
+	if v, ok := o.dict[name]; ok {
+		return v
+	}
+	return nil
+}
+
+func (o *object) pages() *objectref {
+	if o.name("/Type") == "/Catalog" { // check to see if it is the root catalog
+		return o.objectref("/Pages")
+	}
+	return nil
+}
+
+func (o *object) streamLength() int {
+	return o.int("/Length")
 }
 
 func (o *object) hasTextStream() bool {
 	if o.stream == nil {
 		return false
 	}
-	for key := range o.dict {
-		if strings.Contains(string(key), "XObject") || strings.Contains(string(key), "Image") || strings.Contains(string(key), "Metadata") || strings.Contains(string(key), "XML") || strings.Contains(string(key), "XRef") {
-			return false
-		}
-	}
-	return true
+	t := o.name("/Type")
+	return t == "\x00" || t != "/Font" && t != "/FontDescriptor" && t != "/XRef"
 }
 
 func (o *object) setStream(s stream) error {

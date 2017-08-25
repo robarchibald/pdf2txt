@@ -8,5 +8,8 @@ import (
 func TestText(t *testing.T) {
 	f, _ := os.Open(`testData/Kicker.pdf`)
 
-	Text(f)
+	_, err := Text(f)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

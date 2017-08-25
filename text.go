@@ -9,20 +9,40 @@ import (
 )
 
 type catalog struct {
-	pages objectref
+	Pages string
 }
 
 type pages struct {
-	page
+	Count int
+	Kids  []string
 }
 
 type page struct {
+	Parent   string
+	Fonts    map[name]string
+	Contents string
+}
+
+type font struct {
+	Encoding  name
+	ToUnicode string
+}
+
+type content struct {
+	textSections []textsection
 }
 
 // Text extracts text from an io.Reader stream of a PDF file
 // and outputs it into a new io.Reader filled with the text
 // contained in the PDF file.
 func Text(r io.Reader) (io.Reader, error) {
+	catalogs := make(map[string]catalog)
+	pagesList := make(map[string]pages)
+	pageList := make(map[string]page)
+	fonts := make(map[string]font)
+	contents := make(map[string]content)
+	uncategorized := make(map[string]object)
+
 	tchan := make(chan interface{}, 15)
 	go Tokenize(newBufReader(r), tchan)
 
@@ -35,61 +55,124 @@ func Text(r io.Reader) (io.Reader, error) {
 		case hexdata:
 			fmt.Println("hexdata", v)
 		case *object:
-			if objref := v.pages(); objref != nil {
-				fmt.Println("objref", objref)
-			}
-			//			fmt.Println("object", v)
+			oType := v.name("/Type")
+			switch oType {
+			case "/Catalog":
+				catalogs[v.refString()] = catalog{v.objectref("/Pages").refString()}
 
-			if v.hasTextStream() {
-				schan := make(chan interface{})
-				go textTokenize(newMemReader(v.stream), schan)
-				count := 0
-				for t := range schan {
-					fmt.Printf("%d - %T |%v|\n", count, t, t)
-					if t == nil {
-
+			case "/Pages":
+				p := v.array("/Kids")
+				kids := make([]string, len(p))
+				for i := range p {
+					if oref, ok := p[i].(*objectref); ok {
+						kids[i] = oref.refString()
 					}
-					count++
+				}
+				pagesList[v.refString()] = pages{Kids: kids, Count: v.int("/Count")}
+
+			case "/Page":
+				page := page{Fonts: make(map[name]string)}
+				if res, ok := v.search("/Resources").(dictionary); ok {
+					if fonts, ok := res["/Font"].(dictionary); ok {
+						for key, value := range fonts {
+							fmt.Println("font keys & values", key, value)
+							if oref, ok := value.(*objectref); ok {
+								page.Fonts[key] = oref.refString()
+							}
+						}
+					}
+				}
+				if p := v.objectref("/Parent"); p != nil {
+					page.Parent = p.refString()
+				}
+				if c := v.objectref("/Contents"); c != nil {
+					refString := c.refString()
+					page.Contents = refString
+					if _, ok := contents[refString]; !ok {
+						contents[refString] = content{}
+					}
+				}
+				pageList[v.refString()] = page
+
+			case "/Font":
+				font := font{Encoding: v.name("/Encoding")}
+				if u := v.objectref("/ToUnicode"); u != nil {
+					font.ToUnicode = u.refString()
+				}
+				fonts[v.refString()] = font
+
+			case "/XObject": // we don't need
+			case "/FontDescriptor": // we don't need
+			default:
+				refString := v.refString()
+				if _, ok := contents[refString]; ok { // something has already referenced this as content so save as content
+					sections, err := getTextSections(newMemReader(v.stream))
+					if err != nil {
+						fmt.Println("error getting textsection", err)
+						return nil, err // maybe I shouldn't error completely if one page is bad
+					}
+					contents[refString] = content{textSections: sections}
+				} else {
+					uncategorized[refString] = *v
 				}
 			}
 		}
 	}
+	fmt.Println("catalogs", catalogs)
+	fmt.Println("pagesList", pagesList)
+	fmt.Println("pageList", pageList)
+	fmt.Println("fonts", fonts)
+	fmt.Println("contents", contents)
+	fmt.Println("uncategorized", uncategorized)
 	return nil, nil
 }
 
-func textTokenize(r peekingReader, tChan chan interface{}) {
-	var err error
-
-Loop:
+func getTextSections(r peekingReader) ([]textsection, error) {
+	sections := []textsection{}
 	for {
 		item := readNext(r)
-		fmt.Println(item)
 
 		switch v := item.(type) {
 		case error:
-			err = v
-			break Loop
+			if v == io.EOF {
+				return sections, nil
+			}
+			return nil, v
 
 		case token:
 			switch v {
 			case "BT":
-				var textsection *textsection
-				textsection, err = readTextSection(r)
+				textsection, err := readTextSection(r)
 				if err != nil {
-					break Loop
+					return nil, err
 				}
-				tChan <- textsection
-			case "begincmap":
-				var cmap cmap
-				cmap, err = readCmap(r)
-				if err != nil {
-					break Loop
-				}
-				tChan <- cmap
+				sections = append(sections, *textsection)
 			}
 		}
 	}
-	close(tChan)
+}
+
+func getCmap(r peekingReader) (cmap, error) {
+	for {
+		item := readNext(r)
+
+		switch v := item.(type) {
+		case error:
+			if v != io.EOF {
+				return nil, v
+			}
+
+		case token:
+			switch v {
+			case "begincmap":
+				cmap, err := readCmap(r)
+				if err != nil {
+					return nil, err
+				}
+				return cmap, nil
+			}
+		}
+	}
 }
 
 func readTextSection(r peekingReader) (*textsection, error) {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 
 	"github.com/pkg/errors"
 )
@@ -131,7 +130,10 @@ func readObject(r peekingReader, ref *objectref) (*object, error) {
 					if err != nil {
 						return nil, err
 					}
-					o.setStream(s)
+					err = o.setStream(s)
+					if err != nil {
+						return nil, err
+					}
 					continue
 				}
 			case "endstream":
@@ -322,9 +324,24 @@ func readName(r peekingReader) (name, error) {
 	return name(v), err
 }
 
-func (o *object) objectref(name name) *objectref {
-	if oref, ok := o.search(name).(*objectref); ok {
+func (o *objectref) refString() string {
+	return fmt.Sprintf("%d %d", o.number, o.generation)
+}
+
+func (o *object) refString() string {
+	return fmt.Sprintf("%d %d", o.number, o.generation)
+}
+
+func (o *object) objectref(n name) *objectref {
+	if oref, ok := o.search(n).(*objectref); ok {
 		return oref
+	}
+	return nil
+}
+
+func (o *object) array(n name) array {
+	if arr, ok := o.search(n).(array); ok {
+		return arr
 	}
 	return nil
 }
@@ -377,35 +394,29 @@ func (o *object) hasTextStream() bool {
 }
 
 func (o *object) setStream(s stream) error {
-	for key := range o.dict {
-		name := string(key)
-		items := strings.Split(name, "/")
-		for _, decode := range items {
-			if !strings.Contains(string(key), "Decode") && !strings.Contains(string(key), "Crypt") {
-				o.stream = bytes.NewBuffer(s)
-			}
+	filter := o.name("/Filter")
 
-			switch decode {
-			case "ASCIIHexDecode":
-			case "ASCII85Decode":
-			case "LZWDecode":
+	switch filter {
+	//case "/ASCIIHexDecode":
+	//case "/ASCII85Decode":
+	//case "/LZWDecode":
 
-			case "FlateDecode":
-				buf := bytes.NewBuffer(s)
-				r, err := zlib.NewReader(buf)
-				if err != nil {
-					return err
-				}
-				o.stream = r
-			case "RunLengthDecode":
-
-			case "CCITTFaxDecode":
-			case "JBIG2Decode":
-			case "DCTDecode":
-			case "JPXDecode":
-			case "Crypt":
-			}
+	case "/FlateDecode":
+		buf := bytes.NewBuffer(s)
+		r, err := zlib.NewReader(buf)
+		if err != nil {
+			return err
 		}
+		o.stream = r
+	//case "/RunLengthDecode":
+
+	//case "/CCITTFaxDecode":
+	//case "/JBIG2Decode":
+	//case "/DCTDecode":
+	//case "/JPXDecode":
+	//case "/Crypt":
+	default:
+		return errors.New("unknown stream filter")
 	}
 	return nil
 }

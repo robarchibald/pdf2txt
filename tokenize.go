@@ -71,7 +71,6 @@ var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/',
 //   - cmap          : from begincmap to endcmap
 func Tokenize(r peekingReader, tChan chan interface{}) {
 	var err error
-	items := stack{}
 
 Loop:
 	for {
@@ -82,59 +81,46 @@ Loop:
 			err = v
 			break Loop
 
-		case token:
-			switch v {
-			case "obj":
-				var oref *objectref
-				gen := items.Pop()
-				num := items.Pop()
-				oref, err = newObjectref(num, gen, v)
-				if err != nil { // couln't get object reference, so just continue as a token
-					items.Push(v)
-					break // only break from switch, not loop
-				}
-
+		case *objectref:
+			if v.refType == "obj" {
 				var obj *object
-				obj, err = readObject(r, oref)
+				obj, err = readObject(r, v)
 				if err != nil {
 					break Loop
 				}
-				items.Push(obj)
+				tChan <- obj
+			}
+
+		case token:
+			switch v {
 			case "xref":
 				var xref xref
 				xref, err = readXref(r)
 				if err != nil {
 					break Loop
 				}
-				items.Push(xref)
+				tChan <- xref
 			case "BT":
 				var textsection *textsection
 				textsection, err = readTextSection(r)
 				if err != nil {
 					break Loop
 				}
-				items.Push(textsection)
+				tChan <- textsection
 			case "begincmap":
 				var cmap cmap
 				cmap, err = readCmap(r)
 				if err != nil {
 					break Loop
 				}
-				items.Push(cmap)
+				tChan <- cmap
 			default: // send out other tokens
-				items.Push(v)
+				tChan <- v
 			}
 
 		default: // send out other item types
-			items.Push(item)
+			tChan <- item
 		}
-		if items.Len() > 2 { // use a stack so we can look for object reference
-			tChan <- items.LPop()
-		}
-	}
-	var l = items.Len()
-	for i := 0; i < l; i++ {
-		tChan <- items.Pop()
 	}
 	if err != nil {
 		tChan <- err
@@ -435,11 +421,14 @@ func readNext(r peekingReader) interface{} {
 	case ']', ')', '>', '}':
 		return end(b)
 	default:
-		token, err := readToken(b, r)
+		token, oref, err := readTokenOrObjectReference(b, r)
 		if err != nil {
 			return err
 		}
-		return token
+		if oref == nil {
+			return token
+		}
+		return oref
 	}
 }
 
@@ -452,8 +441,8 @@ func isDelimiter(b byte) bool {
 		b == '[' || b == ']' || b == '{' || b == '}' || b == '/' || b == '%'
 }
 
-func isRegular(b byte) bool {
-	return !isWhitespace(b) && !isDelimiter(b)
+func isNumber(b byte) bool {
+	return b >= '0' && b <= '9'
 }
 
 func readArray(r peekingReader) (array, error) {
@@ -504,9 +493,7 @@ func (o *object) hasTextStream() bool {
 		return false
 	}
 	for key := range o.dict {
-		if o.number == 12 || o.number == 250 || o.number == 254 || o.number == 256 || o.number == 258 || o.number == 262 ||
-			o.number == 264 || o.number == 268 || o.number == 270 || o.number == 272 || o.number == 276 || o.number == 277 ||
-			strings.Contains(string(key), "XObject") || strings.Contains(string(key), "Image") || strings.Contains(string(key), "Metadata") || strings.Contains(string(key), "XML") || strings.Contains(string(key), "XRef") {
+		if strings.Contains(string(key), "XObject") || strings.Contains(string(key), "Image") || strings.Contains(string(key), "Metadata") || strings.Contains(string(key), "XML") || strings.Contains(string(key), "XRef") {
 			return false
 		}
 	}
@@ -581,26 +568,64 @@ func readDictionary(r peekingReader) (dictionary, error) {
 	}
 }
 
-func newObjectref(number interface{}, generation interface{}, refType token) (*objectref, error) {
-	var err = errors.New("unable to generate object reference")
-	num, ok := number.(token)
-	if !ok {
-		return nil, err
-	}
-	n, err := strconv.Atoi(string(num))
+// readTokenOrObjectReference attempts to read an object reference if possible and returns
+// a token if not possible. Object references consist of 3 parts:
+//   1. number, 2. generation and 3. "R" or "obj"
+func readTokenOrObjectReference(b byte, r peekingReader) (token, *objectref, error) {
+	tok, err := readToken(b, r)
 	if err != nil {
-		return nil, err
+		return "\x00", nil, err
+	}
+	number, err := strconv.Atoi(string(tok))
+	if err != nil {
+		return tok, nil, nil
 	}
 
-	gen, ok := generation.(token)
-	if !ok {
-		return nil, err
-	}
-	g, err := strconv.Atoi(string(gen))
+	buf, err := r.Peek(8) // should be enough for generation and refType
 	if err != nil {
-		return nil, err
+		return tok, nil, nil
 	}
-	return &objectref{number: n, generation: g, refType: string(refType)}, nil
+
+	var g []byte
+	var count = 0
+	for _, n := range buf {
+		count++
+		if isNumber(n) { // can only be numbers
+			g = append(g, n)
+		} else if isWhitespace(n) {
+			if len(g) != 0 {
+				break
+			}
+		} else { // must be numeric or whitespace (before or after token)
+			return tok, nil, nil
+		}
+	}
+
+	var t []byte
+	for i := count; i < 8; i++ {
+		n := buf[i]
+		count++
+		if n == 'R' || n == 'o' || n == 'b' || n == 'j' { // only R or obj characters allowed
+			t = append(t, n)
+		} else if isWhitespace(n) { // can be whitespace before or after
+			if len(t) != 0 {
+				break
+			}
+		} else if isDelimiter(n) {
+			count--
+			break
+		} else {
+			return tok, nil, nil
+		}
+	}
+
+	refType := string(t)
+	if refType != "R" && refType != "obj" {
+		return tok, nil, nil
+	}
+	generation, _ := strconv.Atoi(string(g))
+	r.ReadBytes(count) // consume the bytes we used in the object reference
+	return "\x00", &objectref{number: number, generation: generation, refType: refType}, nil
 }
 
 func readToken(b byte, r peekingReader) (token, error) {

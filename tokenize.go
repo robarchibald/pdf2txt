@@ -21,24 +21,21 @@ type codestream string
 type token string
 type null bool
 type end byte
-type xref []xrefItem
+type xref map[string]xrefItem
 type cmap map[hexdata]string
+type rootnode string
 type objectref struct {
-	number     int
-	generation int
-	refType    string
+	refString string
+	refType   string
 }
 type object struct {
-	number     int
-	generation int
-	values     []interface{}
-	dict       dictionary
-	stream     io.Reader
+	refString string
+	values    []interface{}
+	dict      dictionary
+	stream    io.Reader
 }
 type xrefItem struct {
-	number     int
 	byteOffset int
-	generation int
 	xrefType   string
 }
 type textsection struct {
@@ -99,6 +96,14 @@ Loop:
 					break Loop
 				}
 				tChan <- xref
+
+			case "trailer":
+				var trailer rootnode
+				trailer, err = readTrailer(r)
+				if err != nil {
+					break Loop
+				}
+				tChan <- trailer
 			default: // send out other tokens
 				tChan <- v
 			}
@@ -115,7 +120,7 @@ Loop:
 }
 
 func readObject(r peekingReader, ref *objectref) (*object, error) {
-	o := object{number: ref.number, generation: ref.generation}
+	o := object{refString: ref.refString}
 	for {
 		item := readNext(r)
 		switch v := item.(type) {
@@ -154,6 +159,9 @@ func readObject(r peekingReader, ref *objectref) (*object, error) {
 func readXref(r peekingReader) (xref, error) {
 	var xrefStart, xrefEnd int
 	var xref xref
+	var number int
+	var generation token
+	var byteOffset int
 	xrefCount := 1
 
 	for {
@@ -167,19 +175,17 @@ func readXref(r peekingReader) (xref, error) {
 				xrefStart, _ = strconv.Atoi(string(v))
 			} else if xrefCount == 2 {
 				xrefEnd, _ = strconv.Atoi(string(v))
-				xref = make([]xrefItem, xrefEnd-xrefStart)
+				xref = make(map[string]xrefItem)
 			} else if xrefCount >= 3 {
 				rowNum := xrefCount/3 - 1
 				switch xrefCount % 3 {
 				case 0: // byte offset
-					byteOffset, _ := strconv.Atoi(string(v))
-					xref[rowNum].byteOffset = byteOffset
-					xref[rowNum].number = xrefStart + rowNum
+					byteOffset, _ = strconv.Atoi(string(v))
+					number = xrefStart + rowNum
 				case 1: // generation number
-					generation, _ := strconv.Atoi(string(v))
-					xref[rowNum].generation = generation
+					generation = v
 				case 2: // xref type
-					xref[rowNum].xrefType = string(v)
+					xref[fmt.Sprintf("%d %s", number, generation)] = xrefItem{byteOffset: byteOffset, xrefType: string(v)}
 				}
 			}
 		}
@@ -188,6 +194,21 @@ func readXref(r peekingReader) (xref, error) {
 			return xref, nil
 		} else if xrefCount > 0 {
 			xrefCount++
+		}
+	}
+}
+
+func readTrailer(r peekingReader) (rootnode, error) {
+	for {
+		item := readNext(r)
+		switch v := item.(type) {
+		case error:
+			return "\x00", v
+
+		case dictionary:
+			if r, ok := v["/Root"].(*objectref); ok {
+				return rootnode(r.refString), nil
+			}
 		}
 	}
 }
@@ -324,14 +345,6 @@ func readName(r peekingReader) (name, error) {
 	return name(v), err
 }
 
-func (o *objectref) refString() string {
-	return fmt.Sprintf("%d %d", o.number, o.generation)
-}
-
-func (o *object) refString() string {
-	return fmt.Sprintf("%d %d", o.number, o.generation)
-}
-
 func (o *object) objectref(n name) *objectref {
 	if oref, ok := o.search(n).(*objectref); ok {
 		return oref
@@ -402,10 +415,18 @@ func (o *object) setStream(s stream) error {
 	//case "/LZWDecode":
 
 	case "/FlateDecode":
+		if o.name("/Type") == "/ObjStm" {
+			fmt.Println("Object Stream Encoding")
+			first, ok := o.search("/First").(token)
+			fmt.Println(first, ok)
+			n, ok := o.search("/N").(token)
+			fmt.Println(n, ok, len(s), s)
+		}
 		buf := bytes.NewBuffer(s)
 		r, err := zlib.NewReader(buf)
 		if err != nil {
-			return err
+			//return err
+			o.stream = bytes.NewReader(s)
 		}
 		o.stream = r
 	//case "/RunLengthDecode":
@@ -416,7 +437,7 @@ func (o *object) setStream(s stream) error {
 	//case "/JPXDecode":
 	//case "/Crypt":
 	default:
-		return errors.New("unknown stream filter")
+		o.stream = bytes.NewReader(s)
 	}
 	return nil
 }
@@ -512,7 +533,7 @@ func readTokenOrObjectReference(b byte, r peekingReader) (token, *objectref, err
 	}
 	generation, _ := strconv.Atoi(string(g))
 	r.ReadBytes(count) // consume the bytes we used in the object reference
-	return "\x00", &objectref{number: number, generation: generation, refType: refType}, nil
+	return "\x00", &objectref{refString: fmt.Sprintf("%d %d", number, generation), refType: refType}, nil
 }
 
 func readToken(b byte, r peekingReader) (token, error) {

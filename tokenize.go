@@ -49,7 +49,9 @@ var eolChars = []byte{'\r', '\n'}
 var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/', '%')
 
 // Tokenize reads through the entire PDF document and adds a token
-// to the tChan every time it encounters a token
+// to the tChan every time it encounters a token making it possible to process
+// tokens in parallel
+//
 // Types of tokens supported:
 //   - comment       : from % to end of line (\r or \n)
 //   - dictionary    : from << to >>
@@ -416,16 +418,14 @@ func (o *object) setStream(s stream) error {
 
 	case "/FlateDecode":
 		if o.name("/Type") == "/ObjStm" {
-			fmt.Println("Object Stream Encoding")
-			first, ok := o.search("/First").(token)
-			fmt.Println(first, ok)
+			f, ok := o.search("/First").(token)
+			first, _ := strconv.Atoi(string(f))
 			n, ok := o.search("/N").(token)
-			fmt.Println(n, ok, len(s), s)
+			fmt.Println("Object Stream Encoding", first, n, ok)
 		}
 		buf := bytes.NewBuffer(s)
 		r, err := zlib.NewReader(buf)
 		if err != nil {
-			//return err
 			o.stream = bytes.NewReader(s)
 		}
 		o.stream = r

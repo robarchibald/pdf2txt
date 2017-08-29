@@ -1,7 +1,6 @@
 package pdf2txt
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -184,7 +183,7 @@ func TestProfotoUGTokenize(t *testing.T) {
 
 	count := 0
 	for c := range tChan {
-		fmt.Printf("%d - %T |%v|\n", count, c, c)
+		//fmt.Printf("%d - %T |%v|\n", count, c, c)
 		if c != nil {
 
 		}

@@ -9,6 +9,18 @@ import (
 	"strings"
 )
 
+type document struct {
+	catalogs      []*catalog
+	pagesList     map[string]*pages
+	pageOrder     []string
+	pageList      map[string]*page
+	fonts         map[string]*font
+	cmaps         map[string]cmap
+	contents      map[string][]textsection
+	uncategorized map[string]*object
+	root          rootnode
+}
+
 type catalog struct {
 	Pages string
 }
@@ -33,30 +45,38 @@ type font struct {
 // and outputs it into a new io.Reader filled with the text
 // contained in the PDF file.
 func Text(r io.Reader) (io.Reader, error) {
-	catalogs := make(map[string]*catalog)
+	d, err := parse(r)
+	if err != nil {
+		return nil, err
+	}
+	if err = d.populate(); err != nil {
+		return nil, err
+	}
+	return d.getText()
+}
+
+func parse(r io.Reader) (*document, error) {
+	catalogs := []*catalog{}
 	pagesList := make(map[string]*pages)
 	pageList := make(map[string]*page)
 	fonts := make(map[string]*font)
 	cmaps := make(map[string]cmap)
 	contents := make(map[string][]textsection)
 	uncategorized := make(map[string]*object)
+	var root rootnode
 
-	tchan := make(chan interface{}, 15)
+	tchan := make(chan interface{}, 100)
 	go Tokenize(newBufReader(r), tchan)
 
 	for t := range tchan {
 		switch v := t.(type) {
-		case text:
-			fmt.Println("text", v)
-		case array:
-			fmt.Println("array", v)
-		case hexdata:
-			fmt.Println("hexdata", v)
+		case rootnode:
+			root = v
 		case *object:
 			oType := v.name("/Type")
 			switch oType {
 			case "/Catalog":
-				catalogs[v.refString] = &catalog{v.objectref("/Pages").refString}
+				catalogs = append(catalogs, &catalog{v.objectref("/Pages").refString})
 
 			case "/Pages":
 				pagesList[v.refString] = getPages(v)
@@ -99,102 +119,84 @@ func Text(r io.Reader) (io.Reader, error) {
 			}
 		}
 	}
-	for i := range catalogs { // loop through catalogs to find all pages
-		catalog := catalogs[i]
-		if _, ok := pagesList[catalog.Pages]; !ok { // create Pages object if not created yet
-			if pages, ok := uncategorized[catalog.Pages]; ok {
-				pagesList[catalog.Pages] = getPages(pages)
-				delete(uncategorized, catalog.Pages)
+	return &document{catalogs: catalogs, pagesList: pagesList, pageList: pageList, fonts: fonts, cmaps: cmaps,
+		contents: contents, uncategorized: uncategorized, root: root}, nil
+}
+
+func (d *document) populate() error {
+	// populate pages objects
+	for i := range d.catalogs {
+		catalog := d.catalogs[i]
+		if _, ok := d.pagesList[catalog.Pages]; !ok {
+			if p, ok := d.uncategorized[catalog.Pages]; ok {
+				d.pagesList[catalog.Pages] = getPages(p)
+				delete(d.uncategorized, catalog.Pages)
 			}
 		}
-		pagesObj := pagesList[catalog.Pages]
+
+		// infer page objects from parent property if needed
+		pagesObj := d.pagesList[catalog.Pages]
 		var kids []string
-		if pagesObj != nil {
+		if pagesObj != nil && len(pagesObj.Kids) != 0 {
 			kids = pagesObj.Kids
 		} else {
-			for ref := range pageList {
-				if pageList[ref].Parent == catalog.Pages {
+			for ref := range d.pageList { // NOTE: this will be in random order. Not correct!!!
+				if d.pageList[ref].Parent == ref {
 					kids = append(kids, ref)
 				}
 			}
+			d.pagesList[catalog.Pages] = &pages{Count: len(kids), Kids: kids}
 		}
-		for pCount := range kids { // loop through pages
+
+		// loop through page objects
+		for pCount := range kids {
 			pageRef := kids[pCount]
-			if pageList[pageRef] == nil {
-				page := getPage(uncategorized[pageRef])
-				pageList[pageRef] = page
-				delete(uncategorized, pageRef)
+			if d.pageList[pageRef] == nil && d.uncategorized[pageRef] != nil {
+				page := getPage(d.uncategorized[pageRef])
+				d.pageList[pageRef] = page
+				delete(d.uncategorized, pageRef)
 			}
-			page := pageList[pageRef]
-			contentsRefs := page.Contents
+			page := d.pageList[pageRef]
+			d.pageOrder = append(d.pageOrder, pageRef)
+			if page == nil {
+				continue
+			}
+
+			// get page contents
 			for cIndex := range page.Contents {
-				if c, ok := contents[contentsRefs[cIndex]]; !ok || c == nil {
-					c, err := getTextSections(newMemReader(uncategorized[contentsRefs[cIndex]].stream))
+				contentsRef := page.Contents[cIndex]
+				if c, ok := d.contents[contentsRef]; (!ok || c == nil) && d.uncategorized[contentsRef] != nil {
+					c, err := getTextSections(newMemReader(d.uncategorized[contentsRef].stream))
 					if err != nil {
-						return nil, err
+						return err
 					}
-					contents[contentsRefs[cIndex]] = c
-					delete(uncategorized, contentsRefs[cIndex])
+					d.contents[contentsRef] = c
+					delete(d.uncategorized, contentsRef)
 				}
 			}
+
+			// get page fonts
 			for name := range page.Fonts {
 				fontRef := page.Fonts[name]
-				if _, ok := fonts[fontRef]; !ok {
-					if uncategorized[fontRef] == nil {
-						continue
-					}
-					fonts[fontRef] = getFont(uncategorized[fontRef])
-					delete(uncategorized, fontRef)
-				}
-				font := fonts[fontRef]
-				cmapRef := font.ToUnicode
-				if cmap, ok := cmaps[cmapRef]; (!ok || cmap == nil) && cmapRef != "" {
-					cmap, err := getCmap(newMemReader(uncategorized[cmapRef].stream))
-					if err != nil {
-						return nil, err
-					}
-					cmaps[cmapRef] = cmap
-					delete(uncategorized, cmapRef)
+				if _, ok := d.fonts[fontRef]; !ok && d.uncategorized[fontRef] != nil {
+					d.fonts[fontRef] = getFont(d.uncategorized[fontRef])
+					delete(d.uncategorized, fontRef)
 				}
 			}
 		}
 	}
 
-	var buf bytes.Buffer
-	for key := range pagesList {
-		v := pagesList[key]
-		for i := range v.Kids {
-			pref := v.Kids[i]
-			page := pageList[pref]
-			for cIndex := range page.Contents {
-				cref := page.Contents[cIndex]
-				c := contents[cref]
-				for contentIndex := range c {
-					section := c[contentIndex]
-					buf.WriteString(string(section.text))
-					for ai := range section.textArray {
-						item := section.textArray[ai]
-						switch t := item.(type) {
-						case hexdata:
-							font := fonts[page.Fonts[section.fontName]]
-							var cmap map[hexdata]string
-							if font != nil && font.ToUnicode != "" && cmaps[font.ToUnicode] != nil {
-								cmap = cmaps[font.ToUnicode]
-							}
-							for ci := 0; ci < len(t); ci += 4 {
-								if cmap != nil {
-									buf.WriteString(cmap[t[ci:ci+4]])
-								} else {
-									c, _ := strconv.ParseInt(string(t[ci:ci+4]), 16, 16)
-									buf.WriteString(fmt.Sprintf("%c", c))
-								}
-							}
-						case text:
-							buf.WriteString(string(t))
-						}
-					}
-				}
+	// populate cmaps
+	for ref := range d.fonts {
+		font := d.fonts[ref]
+		cmapRef := font.ToUnicode
+		if cmap, ok := d.cmaps[cmapRef]; (!ok || cmap == nil) && cmapRef != "" && d.uncategorized[cmapRef] != nil {
+			cmap, err := getCmap(newMemReader(d.uncategorized[cmapRef].stream))
+			if err != nil {
+				return err
 			}
+			d.cmaps[cmapRef] = cmap
+			delete(d.uncategorized, cmapRef)
 		}
 	}
 	//fmt.Println("catalogs", catalogs)
@@ -204,6 +206,42 @@ func Text(r io.Reader) (io.Reader, error) {
 	//fmt.Println("contents", contents)
 	//fmt.Println("cmaps", cmaps)
 	//fmt.Println("uncategorized", uncategorized)
+	return nil
+}
+
+func (d *document) getText() (io.Reader, error) {
+	var buf bytes.Buffer
+	for _, pageRef := range d.pageOrder { // get pages
+		page := d.pageList[pageRef]
+		for _, cref := range page.Contents { // get content
+			c := d.contents[cref]
+			for sIndex := range c { // get text sections
+				section := c[sIndex]
+				buf.WriteString(string(section.text))
+				for ai := range section.textArray {
+					item := section.textArray[ai]
+					switch t := item.(type) {
+					case hexdata:
+						font := d.fonts[page.Fonts[section.fontName]]
+						var cmap map[hexdata]string
+						if font != nil && font.ToUnicode != "" && d.cmaps[font.ToUnicode] != nil {
+							cmap = d.cmaps[font.ToUnicode]
+						}
+						for ci := 0; ci < len(t); ci += 4 {
+							if cmap != nil {
+								buf.WriteString(cmap[t[ci:ci+4]])
+							} else {
+								c, _ := strconv.ParseInt(string(t[ci:ci+4]), 16, 16)
+								buf.WriteString(fmt.Sprintf("%c", c))
+							}
+						}
+					case text:
+						buf.WriteString(string(t))
+					}
+				}
+			}
+		}
+	}
 	return &buf, nil
 }
 

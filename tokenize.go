@@ -33,6 +33,9 @@ type object struct {
 	values    []interface{}
 	dict      dictionary
 	stream    io.Reader
+	isObjStm  bool
+	n         int
+	first     int
 }
 type xrefItem struct {
 	byteOffset int
@@ -418,12 +421,15 @@ func (o *object) setStream(s stream) error {
 
 	case "/FlateDecode":
 		if o.name("/Type") == "/ObjStm" {
-			f, ok := o.search("/First").(token)
-			first, _ := strconv.Atoi(string(f))
-			n, ok := o.search("/N").(token)
-			fmt.Println("Object Stream Encoding", first, n, ok)
+			o.isObjStm = true
+			if f, ok := o.search("/First").(token); ok {
+				o.first, _ = strconv.Atoi(string(f))
+			}
+			if n, ok := o.search("/N").(token); ok {
+				o.n, _ = strconv.Atoi(string(n))
+			}
 		}
-		buf := bytes.NewBuffer(s)
+		buf := bytes.NewReader(s)
 		r, err := zlib.NewReader(buf)
 		if err != nil {
 			o.stream = bytes.NewReader(s)

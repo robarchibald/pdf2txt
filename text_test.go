@@ -3,6 +3,7 @@ package pdf2txt
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"testing"
 )
@@ -45,4 +46,17 @@ func TestProfotoUG(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Println(r.(*bytes.Buffer).String())
+}
+
+func TestGetObjectStream(t *testing.T) {
+	b, _ := ioutil.ReadFile(`testData/objectstream.txt`)
+	o := &object{n: 5, first: 34, isObjStm: true}
+	o.stream = bytes.NewReader(b)
+	objs, err := o.getObjectStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range objs {
+		fmt.Println(objs[i])
+	}
 }

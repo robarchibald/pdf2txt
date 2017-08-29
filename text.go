@@ -292,6 +292,33 @@ func getFont(o *object) *font {
 	return &font
 }
 
+func (o *object) getObjectStream() ([]*object, error) {
+	if !o.isObjStm {
+		return nil, errors.New("Not a valid object stream")
+	}
+	objs := make([]*object, o.n)
+	r := newMemReader(o.stream)
+	for i := 0; i < o.n; i++ {
+		number := readNext(r)
+		refString := fmt.Sprintf("%v 0", number)
+		objs[i] = &object{refString: refString}
+
+		readNext(r) // offset info (we don't need)
+	}
+	for i := 0; i < o.n; i++ {
+		obj := readNext(r)
+		switch v := obj.(type) {
+		case error:
+			return nil, v
+		case dictionary:
+			objs[i].dict = v
+		default:
+			objs[i].values = []interface{}{v}
+		}
+	}
+	return objs, nil
+}
+
 func getTextSections(r peekingReader) ([]textsection, error) {
 	sections := []textsection{}
 	var t textsection

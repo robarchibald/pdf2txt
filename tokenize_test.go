@@ -110,22 +110,6 @@ func TestReadDictionary(t *testing.T) {
 	}
 }
 
-func TestBinaryTokenize(t *testing.T) {
-	f, _ := os.Open(`testData/250_0.txt`)
-
-	tChan := make(chan interface{})
-	go Tokenize(newBufReader(f), tChan)
-
-	count := 0
-	for c := range tChan {
-		//fmt.Printf("%d - %T |%v|\n", count, c, c)
-		if c != nil {
-
-		}
-		count++
-	}
-}
-
 func TestTextTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/132_0.txt`)
 

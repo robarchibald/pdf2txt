@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/pkg/errors"
@@ -28,11 +29,11 @@ type objectref struct {
 	refType   string
 }
 type object struct {
-	refString string
-	values    []interface{}
-	dict      dictionary
-	stream    []byte
-	isObjStm  bool
+	refString       string
+	values          []interface{}
+	dict            dictionary
+	stream          []byte
+	isStreamDecoded bool
 }
 type xrefItem struct {
 	byteOffset int
@@ -85,14 +86,21 @@ Loop:
 				if err != nil {
 					break Loop
 				}
-				tChan <- obj
-				if obj.isObjStm {
-					for i := range obj.values {
-						if o, ok := obj.values[i].(*object); ok {
-							tChan <- o
-						}
+				if obj.isObjectStream() {
+					var objs []*object
+					err = obj.decodeStream()
+					if err != nil {
+						break Loop
+					}
+					objs, err = obj.getObjectStream()
+					if err != nil {
+						break Loop
+					}
+					for i := range objs {
+						tChan <- objs[i]
 					}
 				}
+				tChan <- obj
 			}
 
 		case token:
@@ -120,7 +128,7 @@ Loop:
 			tChan <- item
 		}
 	}
-	if err != nil {
+	if err != nil && err != io.EOF {
 		tChan <- err
 	}
 
@@ -143,15 +151,7 @@ func readObject(r peekingReader, ref *objectref) (*object, error) {
 					if err != nil {
 						return nil, err
 					}
-					if o.stream, err = o.decodeStream(s); err != nil {
-						return nil, err
-					}
-					objs, err := o.getObjectStream()
-					if len(objs) != 0 {
-						for i := range objs {
-							o.values = append(o.values, objs[i])
-						}
-					}
+					o.stream = s
 					continue
 				}
 			case "endstream":
@@ -514,7 +514,10 @@ func (o *object) hasTextStream() bool {
 	return t == "\x00" || t != "/Font" && t != "/FontDescriptor" && t != "/XRef"
 }
 
-func (o *object) decodeStream(s stream) ([]byte, error) {
+func (o *object) decodeStream() error {
+	if o.isStreamDecoded {
+		return nil
+	}
 	filter := o.name("/Filter")
 
 	switch filter {
@@ -523,17 +526,19 @@ func (o *object) decodeStream(s stream) ([]byte, error) {
 	//case "/LZWDecode":
 
 	case "/FlateDecode":
-		buf := bytes.NewBuffer(s)
+		buf := bytes.NewBuffer(o.stream)
 		r, err := zlib.NewReader(buf)
 		if err != nil {
-			return s, err
+			return err
 		}
 
 		var out bytes.Buffer
 		if _, err := out.ReadFrom(r); err != nil {
-			return s, err
+			return err
 		}
-		return out.Bytes(), nil
+		o.isStreamDecoded = true
+		o.stream = out.Bytes()
+		return nil
 	//case "/RunLengthDecode":
 
 	//case "/CCITTFaxDecode":
@@ -542,15 +547,18 @@ func (o *object) decodeStream(s stream) ([]byte, error) {
 	//case "/JPXDecode":
 	//case "/Crypt":
 	default:
-		return s, nil
+		return nil
 	}
 }
 
+func (o *object) isObjectStream() bool {
+	return o.name("/Type") == "/ObjStm"
+}
+
 func (o *object) getObjectStream() ([]*object, error) {
-	if o.name("/Type") != "/ObjStm" {
+	if !o.isObjectStream() {
 		return nil, errors.New("not a valid object stream")
 	}
-	o.isObjStm = true
 	n := o.search("/N").(token)
 	numObjs, _ := strconv.Atoi(string(n))
 

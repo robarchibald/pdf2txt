@@ -57,6 +57,9 @@ func extract(r io.Reader) error {
 
 	for i := range toUnicode {
 		ref := toUnicode[i]
+		if err := uncategorized[ref].decodeStream(); err != nil {
+			return err
+		}
 		if err := ioutil.WriteFile("toUnicode "+ref+".txt", uncategorized[ref].stream, 0644); err != nil {
 			return err
 		}
@@ -64,6 +67,9 @@ func extract(r io.Reader) error {
 
 	for i := range contents {
 		ref := contents[i]
+		if err := uncategorized[ref].decodeStream(); err != nil {
+			return err
+		}
 		if err := ioutil.WriteFile("contents "+ref+".txt", uncategorized[ref].stream, 0644); err != nil {
 			return err
 		}

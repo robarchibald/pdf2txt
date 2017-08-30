@@ -100,6 +100,10 @@ func parse(r io.Reader) (*document, error) {
 			case "/FontDescriptor": // we don't need
 			default:
 				if _, ok := contents[v.refString]; ok { // something has already referenced this as content so save as content
+					err := v.decodeStream()
+					if err != nil {
+						return nil, err
+					}
 					sections, err := getTextSections(newMemReader(v.stream))
 					if err != nil {
 						fmt.Println("error getting textsection", err)
@@ -107,6 +111,10 @@ func parse(r io.Reader) (*document, error) {
 					}
 					contents[v.refString] = sections
 				} else if _, ok := cmaps[v.refString]; ok {
+					err := v.decodeStream()
+					if err != nil {
+						return nil, err
+					}
 					cmap, err := getCmap(newMemReader(v.stream))
 					if err != nil {
 						fmt.Println("error getting cmap", err)
@@ -296,9 +304,6 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 
 		switch v := item.(type) {
 		case error:
-			if v == io.EOF {
-				return sections, nil
-			}
 			return nil, v
 
 		case token:

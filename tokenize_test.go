@@ -1,10 +1,8 @@
 package pdf2txt
 
 import (
-	"fmt"
 	"io"
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -32,7 +30,7 @@ func TestTokenize(t *testing.T) {
 func TestReadDictionary(t *testing.T) {
 	// dictionary string without leading << since those have been removed before readDictionary gets it
 	dict := `/BleedBox[0.0 0.0 839.055 595.276]/Contents 2 0 R/CropBox[0.0 0.0 839.055 595.276]/MediaBox[0.0 0.0 839.055 595.276]/Parent 37 0 R/Resources<</ExtGState<</GS0 35 0 R/GS1 57 0 R>>/Font<</T1_0 32 0 R/T1_1 59 0 R>>/ProcSet[/PDF/Text/ImageC]/XObject<</Im0 3 0 R/Im1 4 0 R>>>>/Rotate 0/TrimBox[0.0 0.0 839.055 595.276]/Type/Page>> `
-	actual, err := readDictionary(newMemReader(strings.NewReader(dict)))
+	actual, err := readDictionary(newMemReader([]byte(dict)))
 	if err != nil && err != io.EOF {
 		t.Fatal("expected success", err)
 	}
@@ -168,7 +166,7 @@ func TestProfotoTokenize(t *testing.T) {
 
 	count := 0
 	for c := range tChan {
-		fmt.Printf("%d - %T |%v|\n", count, c, c)
+		//fmt.Printf("%d - %T |%v|\n", count, c, c)
 		if c != nil {
 
 		}

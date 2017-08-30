@@ -2,7 +2,6 @@ package pdf2txt
 
 import (
 	"bufio"
-	"bytes"
 	"io"
 )
 
@@ -22,10 +21,8 @@ type bufReader struct {
 	br *bufio.Reader
 }
 
-func newMemReader(r io.Reader) *memReader {
-	var b bytes.Buffer
-	b.ReadFrom(r)
-	return &memReader{b.Bytes(), 0}
+func newMemReader(b []byte) *memReader {
+	return &memReader{b, 0}
 }
 
 func (b *memReader) Peek(n int) ([]byte, error) {

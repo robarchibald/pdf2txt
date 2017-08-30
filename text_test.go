@@ -19,9 +19,9 @@ func TestText(t *testing.T) {
 }
 
 func TestGetText(t *testing.T) {
-	f, _ := os.Open(`testData/132_0.txt`)
+	b, _ := ioutil.ReadFile(`testData/132_0.txt`)
 
-	s, err := getTextSections(newMemReader(f))
+	s, err := getTextSections(newMemReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +41,8 @@ func TestProfoto(t *testing.T) {
 }
 
 func TestGetTextSections(t *testing.T) {
-	f, _ := os.Open(`testData/textSection.txt`)
-	fmt.Println(getTextSections(newMemReader(f)))
+	b, _ := ioutil.ReadFile(`testData/textSection.txt`)
+	fmt.Println(getTextSections(newMemReader(b)))
 
 }
 
@@ -59,8 +59,8 @@ func TestProfotoUG(t *testing.T) {
 func TestGetObjectStream(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/objectstream.txt`)
 	o := &object{dict: dictionary{"/Type": name("/ObjStm"), "/N": token("5"), "/First": token("34")}}
-	o.stream = bytes.NewReader(b)
-	objs, err := o.getObjectStream(b)
+	o.stream = b
+	objs, err := o.getObjectStream()
 	if err != nil {
 		t.Fatal(err)
 	}

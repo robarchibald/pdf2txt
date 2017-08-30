@@ -2,11 +2,11 @@ package pdf2txt
 
 import "io"
 import "io/ioutil"
-import "bytes"
+
 import "fmt"
 
 // extract the compressed streams into text files for debugging
-func extract(r io.Reader) {
+func extract(r io.Reader) error {
 	uncategorized := make(map[string]*object)
 	contents := []string{}
 	fonts := make(map[string]*font)
@@ -17,6 +17,9 @@ func extract(r io.Reader) {
 
 	for t := range tchan {
 		switch v := t.(type) {
+		case error:
+			return v
+
 		case *object:
 			oType := v.name("/Type")
 			switch oType {
@@ -34,9 +37,15 @@ func extract(r io.Reader) {
 				}
 
 			case "/ObjStm":
+				if err := ioutil.WriteFile(fmt.Sprintf("objStm %s.txt", v.refString), v.stream, 0644); err != nil {
+					return err
+				}
 				for i := range v.values {
 					if o, ok := v.values[i].(*object); ok {
-						ioutil.WriteFile(fmt.Sprintf("objStm %s.txt", o.refString), []byte(fmt.Sprintf("%v", o)), 0644)
+						err := ioutil.WriteFile(fmt.Sprintf("decoded %s.txt", o.refString), []byte(fmt.Sprintf("%v", o)), 0644)
+						if err != nil {
+							return err
+						}
 					}
 				}
 
@@ -48,15 +57,16 @@ func extract(r io.Reader) {
 
 	for i := range toUnicode {
 		ref := toUnicode[i]
-		var buf bytes.Buffer
-		buf.ReadFrom(uncategorized[ref].stream)
-		ioutil.WriteFile("toUnicode "+ref+".txt", buf.Bytes(), 0644)
+		if err := ioutil.WriteFile("toUnicode "+ref+".txt", uncategorized[ref].stream, 0644); err != nil {
+			return err
+		}
 	}
 
 	for i := range contents {
 		ref := contents[i]
-		var buf bytes.Buffer
-		buf.ReadFrom(uncategorized[ref].stream)
-		ioutil.WriteFile("contents "+ref+".txt", buf.Bytes(), 0644)
+		if err := ioutil.WriteFile("contents "+ref+".txt", uncategorized[ref].stream, 0644); err != nil {
+			return err
+		}
 	}
+	return nil
 }

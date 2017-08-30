@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
-	"io"
 	"strconv"
 
 	"github.com/pkg/errors"
@@ -32,7 +31,7 @@ type object struct {
 	refString string
 	values    []interface{}
 	dict      dictionary
-	stream    io.Reader
+	stream    []byte
 	isObjStm  bool
 }
 type xrefItem struct {
@@ -144,13 +143,14 @@ func readObject(r peekingReader, ref *objectref) (*object, error) {
 					if err != nil {
 						return nil, err
 					}
-					objs, err := o.getObjectStream(s)
+					if o.stream, err = o.decodeStream(s); err != nil {
+						return nil, err
+					}
+					objs, err := o.getObjectStream()
 					if len(objs) != 0 {
 						for i := range objs {
 							o.values = append(o.values, objs[i])
 						}
-					} else {
-						o.stream = o.getStreamReader(s)
 					}
 					continue
 				}
@@ -443,7 +443,12 @@ func (o *object) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(o.refString)
 	buf.WriteString(" obj\n")
-	buf.WriteString(fmt.Sprintf("%v\n", o.dict))
+	if o.dict != nil {
+		buf.WriteString(fmt.Sprintf("%v\n", o.dict))
+	}
+	for i := range o.values {
+		buf.WriteString(fmt.Sprintf("%v\n", o.values[i]))
+	}
 	buf.WriteString("endobj")
 	return buf.String()
 }
@@ -509,7 +514,7 @@ func (o *object) hasTextStream() bool {
 	return t == "\x00" || t != "/Font" && t != "/FontDescriptor" && t != "/XRef"
 }
 
-func (o *object) getStreamReader(s stream) io.Reader {
+func (o *object) decodeStream(s stream) ([]byte, error) {
 	filter := o.name("/Filter")
 
 	switch filter {
@@ -518,12 +523,17 @@ func (o *object) getStreamReader(s stream) io.Reader {
 	//case "/LZWDecode":
 
 	case "/FlateDecode":
-		buf := bytes.NewReader(s)
+		buf := bytes.NewBuffer(s)
 		r, err := zlib.NewReader(buf)
 		if err != nil {
-			return bytes.NewReader(s)
+			return s, err
 		}
-		return r
+
+		var out bytes.Buffer
+		if _, err := out.ReadFrom(r); err != nil {
+			return s, err
+		}
+		return out.Bytes(), nil
 	//case "/RunLengthDecode":
 
 	//case "/CCITTFaxDecode":
@@ -532,11 +542,11 @@ func (o *object) getStreamReader(s stream) io.Reader {
 	//case "/JPXDecode":
 	//case "/Crypt":
 	default:
-		return bytes.NewReader(s)
+		return s, nil
 	}
 }
 
-func (o *object) getObjectStream(s stream) ([]*object, error) {
+func (o *object) getObjectStream() ([]*object, error) {
 	if o.name("/Type") != "/ObjStm" {
 		return nil, errors.New("not a valid object stream")
 	}
@@ -545,7 +555,7 @@ func (o *object) getObjectStream(s stream) ([]*object, error) {
 	numObjs, _ := strconv.Atoi(string(n))
 
 	objs := make([]*object, numObjs)
-	r := newMemReader(o.getStreamReader(s))
+	r := newMemReader(o.stream)
 	for i := 0; i < numObjs; i++ {
 		number := readNext(r)
 		refString := fmt.Sprintf("%v 0", number)

@@ -199,13 +199,6 @@ func (d *document) populate() error {
 			delete(d.uncategorized, cmapRef)
 		}
 	}
-	//fmt.Println("catalogs", catalogs)
-	//fmt.Println("pagesList", pagesList)
-	//fmt.Println("pageList", pageList)
-	//fmt.Println("fonts", fonts)
-	//fmt.Println("contents", contents)
-	//fmt.Println("cmaps", cmaps)
-	//fmt.Println("uncategorized", uncategorized)
 	return nil
 }
 
@@ -217,7 +210,6 @@ func (d *document) getText() (io.Reader, error) {
 			c := d.contents[cref]
 			for sIndex := range c { // get text sections
 				section := c[sIndex]
-				buf.WriteString(string(section.text))
 				for ai := range section.textArray {
 					item := section.textArray[ai]
 					switch t := item.(type) {
@@ -227,19 +219,20 @@ func (d *document) getText() (io.Reader, error) {
 						if font != nil && font.ToUnicode != "" && d.cmaps[font.ToUnicode] != nil {
 							cmap = d.cmaps[font.ToUnicode]
 						}
-						for ci := 0; ci < len(t); ci += 4 {
+						for ci := 0; ci+2 <= len(t); ci += 2 {
 							if cmap != nil {
-								buf.WriteString(cmap[t[ci:ci+4]])
+								buf.WriteString(cmap[t[ci:ci+2]])
 							} else {
 								c, _ := strconv.ParseInt(string(t[ci:ci+4]), 16, 16)
 								buf.WriteString(fmt.Sprintf("%c", c))
 							}
 						}
-					case text:
-						buf.WriteString(string(t))
+					case string:
+						buf.WriteString(t)
 					}
 				}
 			}
+			buf.WriteString("\n")
 		}
 	}
 	return &buf, nil
@@ -292,33 +285,6 @@ func getFont(o *object) *font {
 	return &font
 }
 
-func (o *object) getObjectStream() ([]*object, error) {
-	if !o.isObjStm {
-		return nil, errors.New("Not a valid object stream")
-	}
-	objs := make([]*object, o.n)
-	r := newMemReader(o.stream)
-	for i := 0; i < o.n; i++ {
-		number := readNext(r)
-		refString := fmt.Sprintf("%v 0", number)
-		objs[i] = &object{refString: refString}
-
-		readNext(r) // offset info (we don't need)
-	}
-	for i := 0; i < o.n; i++ {
-		obj := readNext(r)
-		switch v := obj.(type) {
-		case error:
-			return nil, v
-		case dictionary:
-			objs[i].dict = v
-		default:
-			objs[i].values = []interface{}{v}
-		}
-	}
-	return objs, nil
-}
-
 func getTextSections(r peekingReader) ([]textsection, error) {
 	sections := []textsection{}
 	var t textsection
@@ -345,11 +311,12 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 				}
 			case "TJ":
 				if textArray, ok := stack.Pop().(array); ok {
-					t.textArray = textArray
+					t.textArray = append(t.textArray, textArray...)
+					t.textArray = append(t.textArray, " ")
 				}
 			case "Tj":
 				if text, ok := stack.Pop().(text); ok {
-					t.text = text
+					t.textArray = append(t.textArray, text)
 				}
 			case "ET":
 				t.fontName = font // use the current global text state

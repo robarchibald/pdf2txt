@@ -13,7 +13,7 @@ import (
 type comment string
 type dictionary map[name]interface{}
 type stream []byte
-type text string
+type text []interface{}
 type array []interface{}
 type hexdata string
 type name string
@@ -34,8 +34,6 @@ type object struct {
 	dict      dictionary
 	stream    io.Reader
 	isObjStm  bool
-	n         int
-	first     int
 }
 type xrefItem struct {
 	byteOffset int
@@ -44,7 +42,6 @@ type xrefItem struct {
 type textsection struct {
 	fontName  name
 	textArray array
-	text      text
 }
 
 var spaceChars = []byte{'\x00', '\t', '\f', ' ', '\n', '\r'}
@@ -90,6 +87,13 @@ Loop:
 					break Loop
 				}
 				tChan <- obj
+				if obj.isObjStm {
+					for i := range obj.values {
+						if o, ok := obj.values[i].(*object); ok {
+							tChan <- o
+						}
+					}
+				}
 			}
 
 		case token:
@@ -140,9 +144,13 @@ func readObject(r peekingReader, ref *objectref) (*object, error) {
 					if err != nil {
 						return nil, err
 					}
-					err = o.setStream(s)
-					if err != nil {
-						return nil, err
+					objs, err := o.getObjectStream(s)
+					if len(objs) != 0 {
+						for i := range objs {
+							o.values = append(o.values, objs[i])
+						}
+					} else {
+						o.stream = o.getStreamReader(s)
 					}
 					continue
 				}
@@ -225,20 +233,11 @@ func readNext(r peekingReader) interface{} {
 	}
 	switch b {
 	case '(':
-		v, err := readUntil(r, ')') // make into readText
+		t, err := readText(r)
 		if err != nil {
 			return err
 		}
-		r.ReadByte()                          // move read pointer past the ')'
-		for bytes.HasSuffix(v, []byte(`\`)) { // ends with escape character so go to next end
-			n, err := readUntil(r, ')')
-			if err != nil {
-				return err
-			}
-			v = append(v, ')')  // add the escaped ')'
-			v = append(v, n...) // add the next characters too
-		}
-		return text(v)
+		return t
 	case '<':
 		n, err := r.Peek(1)
 		if err != nil {
@@ -321,14 +320,92 @@ func readArray(r peekingReader) (array, error) {
 	items := array{}
 	for {
 		item := readNext(r)
-		if err, ok := item.(error); ok {
-			return nil, errors.Wrap(err, fmt.Sprintf("error while reading array item"))
+		switch v := item.(type) {
+		case error:
+			return nil, v
+
+		case text:
+			items = append(items, v...)
+
+		case end:
+			if v == ']' {
+				return items, nil
+			}
+			items = append(items, v)
+		default:
+			items = append(items, item)
 		}
-		if end, ok := item.(end); ok && end == ']' {
-			return items, nil
-		}
-		items = append(items, item)
 	}
+}
+
+func readText(r peekingReader) (text, error) {
+	v, err := readUntil(r, ')')
+	if err != nil {
+		return nil, err
+	}
+	r.ReadByte()                          // move read pointer past the ')'
+	for bytes.HasSuffix(v, []byte(`\`)) { // ends with escape character so go to next end
+		n, err := readUntil(r, ')')
+		if err != nil {
+			return nil, err
+		}
+		v = append(v, ')')  // add the escaped ')'
+		v = append(v, n...) // add the next characters too
+	}
+	return separateUnicode(v), nil
+}
+
+func separateUnicode(t []byte) text {
+	var result text
+	start := bytes.IndexByte(t, '\\')
+	var lastChar byte
+	if start != -1 {
+		v := string(t[:start])
+		result = append(result, v) // include up to, but not including '\'
+		var num bytes.Buffer
+		var str bytes.Buffer
+		isUnicode := true
+		for i := start + 1; i < len(t); i++ {
+			c := t[i]
+			switch c {
+			case '\\':
+				if lastChar == '\\' && isUnicode {
+					isUnicode = false // escaping backslash
+					str.WriteByte(c)
+
+				} else {
+					isUnicode = true
+					if str.Len() != 0 {
+						result = append(result, str.String())
+						str.Reset()
+					}
+				}
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				if isUnicode {
+					num.WriteByte(c)
+				} else {
+					str.WriteByte(c)
+				}
+			default:
+				if isUnicode { // changing from Unicode to string, so send out unicode info
+					unicode, _ := strconv.ParseInt(num.String(), 8, 32)
+					result = append(result, hexdata(fmt.Sprintf("%02dx", unicode)))
+					isUnicode = false
+					num.Reset()
+				}
+				str.WriteByte(c)
+			}
+			lastChar = c
+		}
+		if isUnicode {
+			unicode, _ := strconv.ParseInt(num.String(), 8, 32)
+			result = append(result, hexdata(fmt.Sprintf("%02x", unicode)))
+		} else {
+			result = append(result, str.String())
+		}
+		return result
+	}
+	return text{string(t)}
 }
 
 func readName(r peekingReader) (name, error) {
@@ -348,6 +425,27 @@ func readName(r peekingReader) (name, error) {
 	}
 
 	return name(v), err
+}
+
+func (d dictionary) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("<<")
+	for key := range d {
+		buf.WriteString("\n  ")
+		buf.WriteString(string(key))
+		buf.WriteString(fmt.Sprintf(" %v", d[key]))
+	}
+	buf.WriteString("\n>>")
+	return buf.String()
+}
+
+func (o *object) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(o.refString)
+	buf.WriteString(" obj\n")
+	buf.WriteString(fmt.Sprintf("%v\n", o.dict))
+	buf.WriteString("endobj")
+	return buf.String()
 }
 
 func (o *object) objectref(n name) *objectref {
@@ -411,7 +509,7 @@ func (o *object) hasTextStream() bool {
 	return t == "\x00" || t != "/Font" && t != "/FontDescriptor" && t != "/XRef"
 }
 
-func (o *object) setStream(s stream) error {
+func (o *object) getStreamReader(s stream) io.Reader {
 	filter := o.name("/Filter")
 
 	switch filter {
@@ -420,21 +518,12 @@ func (o *object) setStream(s stream) error {
 	//case "/LZWDecode":
 
 	case "/FlateDecode":
-		if o.name("/Type") == "/ObjStm" {
-			o.isObjStm = true
-			if f, ok := o.search("/First").(token); ok {
-				o.first, _ = strconv.Atoi(string(f))
-			}
-			if n, ok := o.search("/N").(token); ok {
-				o.n, _ = strconv.Atoi(string(n))
-			}
-		}
 		buf := bytes.NewReader(s)
 		r, err := zlib.NewReader(buf)
 		if err != nil {
-			o.stream = bytes.NewReader(s)
+			return bytes.NewReader(s)
 		}
-		o.stream = r
+		return r
 	//case "/RunLengthDecode":
 
 	//case "/CCITTFaxDecode":
@@ -443,9 +532,39 @@ func (o *object) setStream(s stream) error {
 	//case "/JPXDecode":
 	//case "/Crypt":
 	default:
-		o.stream = bytes.NewReader(s)
+		return bytes.NewReader(s)
 	}
-	return nil
+}
+
+func (o *object) getObjectStream(s stream) ([]*object, error) {
+	if o.name("/Type") != "/ObjStm" {
+		return nil, errors.New("not a valid object stream")
+	}
+	o.isObjStm = true
+	n := o.search("/N").(token)
+	numObjs, _ := strconv.Atoi(string(n))
+
+	objs := make([]*object, numObjs)
+	r := newMemReader(o.getStreamReader(s))
+	for i := 0; i < numObjs; i++ {
+		number := readNext(r)
+		refString := fmt.Sprintf("%v 0", number)
+		objs[i] = &object{refString: refString}
+
+		readNext(r) // offset info (we don't need)
+	}
+	for i := 0; i < numObjs; i++ {
+		obj := readNext(r)
+		switch v := obj.(type) {
+		case error:
+			return nil, v
+		case dictionary:
+			objs[i].dict = v
+		default:
+			objs[i].values = []interface{}{v}
+		}
+	}
+	return objs, nil
 }
 
 func readDictionary(r peekingReader) (dictionary, error) {

@@ -11,10 +11,11 @@ import (
 func TestText(t *testing.T) {
 	f, _ := os.Open(`testData/Kicker.pdf`)
 
-	_, err := Text(f)
+	r, err := Text(f)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fmt.Println(r.(*bytes.Buffer).String())
 }
 
 func TestGetText(t *testing.T) {
@@ -32,10 +33,17 @@ func TestGetText(t *testing.T) {
 func TestProfoto(t *testing.T) {
 	f, _ := os.Open(`testData/Profoto.pdf`)
 
-	_, err := Text(f)
+	r, err := Text(f)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fmt.Println(r.(*bytes.Buffer).String())
+}
+
+func TestGetTextSections(t *testing.T) {
+	f, _ := os.Open(`testData/textSection.txt`)
+	fmt.Println(getTextSections(newMemReader(f)))
+
 }
 
 func TestProfotoUG(t *testing.T) {
@@ -50,9 +58,9 @@ func TestProfotoUG(t *testing.T) {
 
 func TestGetObjectStream(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/objectstream.txt`)
-	o := &object{n: 5, first: 34, isObjStm: true}
+	o := &object{dict: dictionary{"/Type": name("/ObjStm"), "/N": token("5"), "/First": token("34")}}
 	o.stream = bytes.NewReader(b)
-	objs, err := o.getObjectStream()
+	objs, err := o.getObjectStream(b)
 	if err != nil {
 		t.Fatal(err)
 	}

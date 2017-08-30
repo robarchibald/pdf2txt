@@ -3,6 +3,7 @@ package pdf2txt
 import "io"
 import "io/ioutil"
 import "bytes"
+import "fmt"
 
 // extract the compressed streams into text files for debugging
 func extract(r io.Reader) {
@@ -32,6 +33,13 @@ func extract(r io.Reader) {
 					}
 				}
 
+			case "/ObjStm":
+				for i := range v.values {
+					if o, ok := v.values[i].(*object); ok {
+						ioutil.WriteFile(fmt.Sprintf("objStm %s.txt", o.refString), []byte(fmt.Sprintf("%v", o)), 0644)
+					}
+				}
+
 			default:
 				uncategorized[v.refString] = v
 			}
@@ -42,13 +50,13 @@ func extract(r io.Reader) {
 		ref := toUnicode[i]
 		var buf bytes.Buffer
 		buf.ReadFrom(uncategorized[ref].stream)
-		ioutil.WriteFile("toUnicode "+ref+".txt", buf.Bytes(), 644)
+		ioutil.WriteFile("toUnicode "+ref+".txt", buf.Bytes(), 0644)
 	}
 
 	for i := range contents {
 		ref := contents[i]
 		var buf bytes.Buffer
 		buf.ReadFrom(uncategorized[ref].stream)
-		ioutil.WriteFile("contents "+ref+".txt", buf.Bytes(), 644)
+		ioutil.WriteFile("contents "+ref+".txt", buf.Bytes(), 0644)
 	}
 }

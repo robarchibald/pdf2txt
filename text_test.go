@@ -42,29 +42,27 @@ func TestProfoto(t *testing.T) {
 
 func TestGetTextSections(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/textSection.txt`)
-	fmt.Println(getTextSections(newMemReader(b)))
-
+	_, err := getTextSections(newMemReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProfotoUG(t *testing.T) {
 	f, _ := os.Open(`testData/ProfotoUserGuide.pdf`)
 
-	r, err := Text(f)
+	_, err := Text(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Println(r.(*bytes.Buffer).String())
 }
 
 func TestGetObjectStream(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/objectstream.txt`)
 	o := &object{dict: dictionary{"/Type": name("/ObjStm"), "/N": token("5"), "/First": token("34")}}
 	o.stream = b
-	objs, err := o.getObjectStream()
+	_, err := o.getObjectStream()
 	if err != nil {
 		t.Fatal(err)
-	}
-	for i := range objs {
-		fmt.Println(objs[i])
 	}
 }

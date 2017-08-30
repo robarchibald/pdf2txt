@@ -231,7 +231,7 @@ func (d *document) getText() (io.Reader, error) {
 							if cmap != nil {
 								buf.WriteString(cmap[t[ci:ci+2]])
 							} else {
-								c, _ := strconv.ParseInt(string(t[ci:ci+4]), 16, 16)
+								c, _ := strconv.ParseInt(string(t[ci:ci+2]), 16, 16)
 								buf.WriteString(fmt.Sprintf("%c", c))
 							}
 						}
@@ -304,6 +304,9 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 
 		switch v := item.(type) {
 		case error:
+			if v == io.EOF {
+				return sections, nil
+			}
 			return nil, v
 
 		case token:
@@ -343,9 +346,10 @@ func getCmap(r peekingReader) (cmap, error) {
 
 		switch v := item.(type) {
 		case error:
-			if v != io.EOF {
-				return nil, v
+			if v == io.EOF {
+				return cmap, nil
 			}
+			return nil, v
 
 		case token:
 			switch v {

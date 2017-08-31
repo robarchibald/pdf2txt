@@ -449,7 +449,7 @@ func (o *object) String() string {
 	for i := range o.values {
 		buf.WriteString(fmt.Sprintf("%v\n", o.values[i]))
 	}
-	buf.WriteString("endobj")
+	buf.WriteString("endobj\n")
 	return buf.String()
 }
 

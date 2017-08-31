@@ -12,7 +12,6 @@ import (
 type document struct {
 	catalogs      []*catalog
 	pagesList     map[string]*pages
-	pageOrder     []string
 	pageList      map[string]*page
 	fonts         map[string]*font
 	cmaps         map[string]cmap
@@ -26,8 +25,8 @@ type catalog struct {
 }
 
 type pages struct {
-	Count int
-	Kids  []string
+	Kids   []string
+	isNull bool
 }
 
 type page struct {
@@ -49,9 +48,9 @@ func Text(r io.Reader) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = d.populate(); err != nil {
-		return nil, err
-	}
+	//	if err = d.populate(); err != nil {
+	//return nil, err
+	//}
 	return d.getText()
 }
 
@@ -82,18 +81,57 @@ func parse(r io.Reader) (*document, error) {
 				pagesList[v.refString] = getPages(v)
 
 			case "/Page":
-				pageList[v.refString] = getPage(v)
-				if pageList[v.refString].Contents != nil {
-					for i := range pageList[v.refString].Contents {
-						item := pageList[v.refString].Contents[i]
-						contents[item] = nil
+				pItem := getPage(v)
+				pageList[v.refString] = pItem
+				for i := range pItem.Contents {
+					cref := pItem.Contents[i]
+					// contents already available, so get text
+					if cObj, ok := uncategorized[cref]; ok {
+						if err := cObj.decodeStream(); err != nil {
+							return nil, err
+						}
+						c, err := getTextSections(newMemReader(cObj.stream))
+						if err != nil {
+							return nil, err
+						}
+						contents[cref] = c
+						delete(uncategorized, cref)
+
+						// haven't seen contents yet, so just flag it for later retrieval
+					} else {
+						contents[cref] = nil
+					}
+				}
+				if pItem.Parent != "" {
+					if pagesItem, ok := pagesList[pItem.Parent]; ok {
+						if pagesItem.isNull { // null object so add this reference to the list of kids
+							pagesItem.Kids = append(pagesItem.Kids, v.refString)
+						}
+					} else {
+						pagesList[pItem.Parent] = &pages{Kids: []string{v.refString}, isNull: true}
 					}
 				}
 
 			case "/Font":
-				fonts[v.refString] = getFont(v)
-				if fonts[v.refString].ToUnicode != "" {
-					cmaps[fonts[v.refString].ToUnicode] = nil
+				f := getFont(v)
+				fonts[v.refString] = f
+				if f.ToUnicode != "" {
+					// cmap already available, so create
+					if u, ok := uncategorized[f.ToUnicode]; ok {
+						if err := u.decodeStream(); err != nil {
+							return nil, err
+						}
+						cmap, err := getCmap(newMemReader(u.stream))
+						if err != nil {
+							return nil, err
+						}
+						cmaps[f.ToUnicode] = cmap
+						delete(uncategorized, f.ToUnicode)
+
+						// haven't seen cmap yet, so just flag for later
+					} else {
+						cmaps[f.ToUnicode] = nil
+					}
 				}
 
 			case "/XObject": // we don't need
@@ -153,7 +191,7 @@ func (d *document) populate() error {
 					kids = append(kids, ref)
 				}
 			}
-			d.pagesList[catalog.Pages] = &pages{Count: len(kids), Kids: kids}
+			d.pagesList[catalog.Pages] = &pages{Kids: kids}
 		}
 
 		// loop through page objects
@@ -165,7 +203,6 @@ func (d *document) populate() error {
 				delete(d.uncategorized, pageRef)
 			}
 			page := d.pageList[pageRef]
-			d.pageOrder = append(d.pageOrder, pageRef)
 			if page == nil {
 				continue
 			}
@@ -174,6 +211,9 @@ func (d *document) populate() error {
 			for cIndex := range page.Contents {
 				contentsRef := page.Contents[cIndex]
 				if c, ok := d.contents[contentsRef]; (!ok || c == nil) && d.uncategorized[contentsRef] != nil {
+					if err := d.uncategorized[contentsRef].decodeStream(); err != nil {
+						return err
+					}
 					c, err := getTextSections(newMemReader(d.uncategorized[contentsRef].stream))
 					if err != nil {
 						return err
@@ -199,6 +239,9 @@ func (d *document) populate() error {
 		font := d.fonts[ref]
 		cmapRef := font.ToUnicode
 		if cmap, ok := d.cmaps[cmapRef]; (!ok || cmap == nil) && cmapRef != "" && d.uncategorized[cmapRef] != nil {
+			if err := d.uncategorized[cmapRef].decodeStream(); err != nil {
+				return err
+			}
 			cmap, err := getCmap(newMemReader(d.uncategorized[cmapRef].stream))
 			if err != nil {
 				return err
@@ -212,31 +255,33 @@ func (d *document) populate() error {
 
 func (d *document) getText() (io.Reader, error) {
 	var buf bytes.Buffer
-	for _, pageRef := range d.pageOrder { // get pages
-		page := d.pageList[pageRef]
-		for _, cref := range page.Contents { // get content
-			c := d.contents[cref]
-			for sIndex := range c { // get text sections
-				section := c[sIndex]
-				for ai := range section.textArray {
-					item := section.textArray[ai]
-					switch t := item.(type) {
-					case hexdata:
-						font := d.fonts[page.Fonts[section.fontName]]
-						var cmap map[hexdata]string
-						if font != nil && font.ToUnicode != "" && d.cmaps[font.ToUnicode] != nil {
-							cmap = d.cmaps[font.ToUnicode]
-						}
-						for ci := 0; ci+2 <= len(t); ci += 2 {
-							if cmap != nil {
-								buf.WriteString(cmap[t[ci:ci+2]])
-							} else {
-								c, _ := strconv.ParseInt(string(t[ci:ci+2]), 16, 16)
-								buf.WriteString(fmt.Sprintf("%c", c))
+	for _, pages := range d.pagesList { // get pages objects
+		for _, pageRef := range pages.Kids { // get page objects
+			page := d.pageList[pageRef]
+			for _, cref := range page.Contents { // get content
+				c := d.contents[cref]
+				for sIndex := range c { // get text sections
+					section := c[sIndex]
+					for ai := range section.textArray {
+						item := section.textArray[ai]
+						switch t := item.(type) {
+						case hexdata:
+							font := d.fonts[page.Fonts[section.fontName]]
+							var cmap map[hexdata]string
+							if font != nil && font.ToUnicode != "" && d.cmaps[font.ToUnicode] != nil {
+								cmap = d.cmaps[font.ToUnicode]
 							}
+							for ci := 0; ci+2 <= len(t); ci += 2 {
+								if cmap != nil {
+									buf.WriteString(cmap[t[ci:ci+2]])
+								} else {
+									c, _ := strconv.ParseInt(string(t[ci:ci+2]), 16, 16)
+									buf.WriteString(fmt.Sprintf("%c", c))
+								}
+							}
+						case string:
+							buf.WriteString(t)
 						}
-					case string:
-						buf.WriteString(t)
 					}
 				}
 			}
@@ -254,7 +299,7 @@ func getPages(o *object) *pages {
 			kids[i] = oref.refString
 		}
 	}
-	return &pages{Kids: kids, Count: o.int("/Count")}
+	return &pages{Kids: kids}
 }
 
 func getPage(o *object) *page {

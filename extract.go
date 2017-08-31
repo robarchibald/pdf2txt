@@ -24,12 +24,12 @@ func extract(r io.Reader) error {
 			oType := v.name("/Type")
 			switch oType {
 			case "/Page":
-				page := getPage(v)
+				page := v.getPage()
 				contents = append(contents, page.Contents...)
 
 			case "/Font":
 				if _, ok := fonts[v.refString]; !ok {
-					font := getFont(v)
+					font := v.getFont()
 					fonts[v.refString] = font
 					if font.ToUnicode != "" {
 						toUnicode = append(toUnicode, font.ToUnicode)
@@ -40,12 +40,14 @@ func extract(r io.Reader) error {
 				if err := ioutil.WriteFile(fmt.Sprintf("objStm %s.txt", v.refString), v.stream, 0644); err != nil {
 					return err
 				}
-				for i := range v.values {
-					if o, ok := v.values[i].(*object); ok {
-						err := ioutil.WriteFile(fmt.Sprintf("decoded %s.txt", o.refString), []byte(fmt.Sprintf("%v", o)), 0644)
-						if err != nil {
-							return err
-						}
+				objs, err := v.getObjectStream()
+				if err != nil {
+					return err
+				}
+				for i := range objs {
+					err := ioutil.WriteFile(fmt.Sprintf("decoded %s.txt", objs[i].refString), []byte(fmt.Sprintf("%v", objs[i])), 0644)
+					if err != nil {
+						return err
 					}
 				}
 

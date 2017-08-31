@@ -78,10 +78,10 @@ func parse(r io.Reader) (*document, error) {
 				catalogs = append(catalogs, &catalog{v.objectref("/Pages").refString})
 
 			case "/Pages":
-				pagesList[v.refString] = getPages(v)
+				pagesList[v.refString] = v.getPages()
 
 			case "/Page":
-				pItem := getPage(v)
+				pItem := v.getPage()
 				pageList[v.refString] = pItem
 				if err := handlePageContents(pItem, contents, uncategorized); err != nil {
 					return nil, err
@@ -89,7 +89,7 @@ func parse(r io.Reader) (*document, error) {
 				handlePageParent(pItem, v.refString, pagesList)
 
 			case "/Font":
-				f := getFont(v)
+				f := v.getFont()
 				fonts[v.refString] = f
 				if err := handleToUnicode(f, cmaps, uncategorized); err != nil {
 					return nil, err
@@ -100,13 +100,13 @@ func parse(r io.Reader) (*document, error) {
 			default:
 				// something has already referenced this as content so save as content
 				if _, ok := contents[v.refString]; ok {
-					if err := saveContents(v, contents); err != nil {
+					if err := v.saveContents(contents); err != nil {
 						return nil, err
 					}
 
 					// save cmap
 				} else if _, ok := cmaps[v.refString]; ok {
-					if err := saveCmap(v, cmaps); err != nil {
+					if err := v.saveCmap(cmaps); err != nil {
 						return nil, err
 					}
 				} else {
@@ -123,79 +123,43 @@ func (d *document) getText() (io.Reader, error) {
 	var buf bytes.Buffer
 	for _, pages := range d.pagesList { // get pages objects
 		for _, pageRef := range pages.Kids { // get page objects
-			page := d.pageList[pageRef]
-			for _, cref := range page.Contents { // get content
-				c := d.contents[cref]
-				for sIndex := range c { // get text sections
-					section := c[sIndex]
-					for ai := range section.textArray {
-						item := section.textArray[ai]
-						switch t := item.(type) {
-						case hexdata:
-							font := d.fonts[page.Fonts[section.fontName]]
-							var cmap map[hexdata]string
-							if font != nil && font.ToUnicode != "" && d.cmaps[font.ToUnicode] != nil {
-								cmap = d.cmaps[font.ToUnicode]
-							}
-							for ci := 0; ci+2 <= len(t); ci += 2 {
-								if cmap != nil {
-									buf.WriteString(cmap[t[ci:ci+2]])
-								} else {
-									c, _ := strconv.ParseInt(string(t[ci:ci+2]), 16, 16)
-									buf.WriteString(fmt.Sprintf("%c", c))
-								}
-							}
-						case string:
-							buf.WriteString(t)
-						}
-					}
-				}
-			}
+			buf.WriteString(d.getPageText(d.pageList[pageRef]))
 			buf.WriteString("\n")
 		}
 	}
 	return &buf, nil
 }
 
-func getPages(o *object) *pages {
-	k := o.array("/Kids")
-	kids := make([]string, len(k))
-	for i := range k {
-		if oref, ok := k[i].(*objectref); ok {
-			kids[i] = oref.refString
-		}
-	}
-	return &pages{Kids: kids}
-}
-
-func getPage(o *object) *page {
-	page := page{Fonts: make(map[name]string)}
-	if res, ok := o.search("/Resources").(dictionary); ok {
-		if fonts, ok := res["/Font"].(dictionary); ok {
-			for key, value := range fonts {
-				if oref, ok := value.(*objectref); ok {
-					page.Fonts[key] = oref.refString
+func (d *document) getPageText(p *page) string {
+	var buf bytes.Buffer
+	for _, cref := range p.Contents { // get content
+		c := d.contents[cref]
+		for sIndex := range c { // get text sections
+			section := c[sIndex]
+			for ai := range section.textArray {
+				item := section.textArray[ai]
+				switch t := item.(type) {
+				case hexdata:
+					font := d.fonts[p.Fonts[section.fontName]]
+					var cmap map[hexdata]string
+					if font != nil && font.ToUnicode != "" && d.cmaps[font.ToUnicode] != nil {
+						cmap = d.cmaps[font.ToUnicode]
+					}
+					for ci := 0; ci+2 <= len(t); ci += 2 {
+						if cmap != nil {
+							buf.WriteString(cmap[t[ci:ci+2]])
+						} else {
+							c, _ := strconv.ParseInt(string(t[ci:ci+2]), 16, 16)
+							buf.WriteString(fmt.Sprintf("%c", c))
+						}
+					}
+				case string:
+					buf.WriteString(t)
 				}
 			}
 		}
 	}
-	// Contents can be either a single object reference
-	// or an array of object references
-	if c := o.search("/Contents"); c != nil {
-		if co, ok := c.(*objectref); ok {
-			page.Contents = []string{co.refString}
-		} else if ca, ok := c.(array); ok {
-			for i := range ca {
-				if cao, ok := ca[i].(*objectref); ok {
-					page.Contents = append(page.Contents, cao.refString)
-				}
-			}
-		}
-	}
-	if p := o.objectref("/Parent"); p != nil {
-		page.Parent = p.refString
-	}
-	return &page
+	return buf.String()
 }
 
 func handlePageContents(pItem *page, contents map[string][]textsection, uncategorized map[string]*object) error {
@@ -203,7 +167,7 @@ func handlePageContents(pItem *page, contents map[string][]textsection, uncatego
 		cref := pItem.Contents[i]
 		// contents already available, so get text
 		if cObj, ok := uncategorized[cref]; ok {
-			if err := saveContents(cObj, contents); err != nil {
+			if err := cObj.saveContents(contents); err != nil {
 				return err
 			}
 			delete(uncategorized, cref)
@@ -213,19 +177,6 @@ func handlePageContents(pItem *page, contents map[string][]textsection, uncatego
 			contents[cref] = nil
 		}
 	}
-	return nil
-}
-
-func saveContents(v *object, contents map[string][]textsection) error {
-	err := v.decodeStream()
-	if err != nil {
-		return err
-	}
-	sections, err := getTextSections(newMemReader(v.stream))
-	if err != nil {
-		return err
-	}
-	contents[v.refString] = sections
 	return nil
 }
 
@@ -241,19 +192,11 @@ func handlePageParent(pItem *page, pageRef string, pagesList map[string]*pages) 
 	}
 }
 
-func getFont(o *object) *font {
-	font := font{Encoding: o.name("/Encoding")}
-	if u := o.objectref("/ToUnicode"); u != nil {
-		font.ToUnicode = u.refString
-	}
-	return &font
-}
-
 func handleToUnicode(f *font, cmaps map[string]cmap, uncategorized map[string]*object) error {
 	if f.ToUnicode != "" {
 		// cmap already available, so create
 		if u, ok := uncategorized[f.ToUnicode]; ok {
-			if err := saveCmap(u, cmaps); err != nil {
+			if err := u.saveCmap(cmaps); err != nil {
 				return err
 			}
 			delete(uncategorized, f.ToUnicode)
@@ -263,18 +206,6 @@ func handleToUnicode(f *font, cmaps map[string]cmap, uncategorized map[string]*o
 			cmaps[f.ToUnicode] = nil
 		}
 	}
-	return nil
-}
-
-func saveCmap(toUnicode *object, cmaps map[string]cmap) error {
-	if err := toUnicode.decodeStream(); err != nil {
-		return err
-	}
-	cmap, err := getCmap(newMemReader(toUnicode.stream))
-	if err != nil {
-		return err
-	}
-	cmaps[toUnicode.refString] = cmap
 	return nil
 }
 
@@ -316,10 +247,8 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 
 		case array:
 			lastArray = v
-
 		case text:
 			lastText = v
-
 		case name:
 			lastName = v
 		}

@@ -83,82 +83,32 @@ func parse(r io.Reader) (*document, error) {
 			case "/Page":
 				pItem := getPage(v)
 				pageList[v.refString] = pItem
-				for i := range pItem.Contents {
-					cref := pItem.Contents[i]
-					// contents already available, so get text
-					if cObj, ok := uncategorized[cref]; ok {
-						if err := cObj.decodeStream(); err != nil {
-							return nil, err
-						}
-						c, err := getTextSections(newMemReader(cObj.stream))
-						if err != nil {
-							return nil, err
-						}
-						contents[cref] = c
-						delete(uncategorized, cref)
-
-						// haven't seen contents yet, so just flag it for later retrieval
-					} else {
-						contents[cref] = nil
-					}
+				if err := handlePageContents(pItem, contents, uncategorized); err != nil {
+					return nil, err
 				}
-				if pItem.Parent != "" {
-					if pagesItem, ok := pagesList[pItem.Parent]; ok {
-						if pagesItem.isNull { // null object so add this reference to the list of kids
-							pagesItem.Kids = append(pagesItem.Kids, v.refString)
-						}
-					} else {
-						pagesList[pItem.Parent] = &pages{Kids: []string{v.refString}, isNull: true}
-					}
-				}
+				handlePageParent(pItem, v.refString, pagesList)
 
 			case "/Font":
 				f := getFont(v)
 				fonts[v.refString] = f
-				if f.ToUnicode != "" {
-					// cmap already available, so create
-					if u, ok := uncategorized[f.ToUnicode]; ok {
-						if err := u.decodeStream(); err != nil {
-							return nil, err
-						}
-						cmap, err := getCmap(newMemReader(u.stream))
-						if err != nil {
-							return nil, err
-						}
-						cmaps[f.ToUnicode] = cmap
-						delete(uncategorized, f.ToUnicode)
-
-						// haven't seen cmap yet, so just flag for later
-					} else {
-						cmaps[f.ToUnicode] = nil
-					}
+				if err := handleToUnicode(f, cmaps, uncategorized); err != nil {
+					return nil, err
 				}
 
 			case "/XObject": // we don't need
 			case "/FontDescriptor": // we don't need
 			default:
-				if _, ok := contents[v.refString]; ok { // something has already referenced this as content so save as content
-					err := v.decodeStream()
-					if err != nil {
+				// something has already referenced this as content so save as content
+				if _, ok := contents[v.refString]; ok {
+					if err := saveContents(v, contents); err != nil {
 						return nil, err
 					}
-					sections, err := getTextSections(newMemReader(v.stream))
-					if err != nil {
-						fmt.Println("error getting textsection", err)
-						return nil, err // maybe I shouldn't error completely if one page is bad
-					}
-					contents[v.refString] = sections
+
+					// save cmap
 				} else if _, ok := cmaps[v.refString]; ok {
-					err := v.decodeStream()
-					if err != nil {
+					if err := saveCmap(v, cmaps); err != nil {
 						return nil, err
 					}
-					cmap, err := getCmap(newMemReader(v.stream))
-					if err != nil {
-						fmt.Println("error getting cmap", err)
-						return nil, err // maybe I shouldn't error completely if one page is bad
-					}
-					cmaps[v.refString] = cmap
 				} else {
 					uncategorized[v.refString] = v
 				}
@@ -229,6 +179,8 @@ func getPage(o *object) *page {
 			}
 		}
 	}
+	// Contents can be either a single object reference
+	// or an array of object references
 	if c := o.search("/Contents"); c != nil {
 		if co, ok := c.(*objectref); ok {
 			page.Contents = []string{co.refString}
@@ -246,12 +198,84 @@ func getPage(o *object) *page {
 	return &page
 }
 
+func handlePageContents(pItem *page, contents map[string][]textsection, uncategorized map[string]*object) error {
+	for i := range pItem.Contents {
+		cref := pItem.Contents[i]
+		// contents already available, so get text
+		if cObj, ok := uncategorized[cref]; ok {
+			if err := saveContents(cObj, contents); err != nil {
+				return err
+			}
+			delete(uncategorized, cref)
+
+			// haven't seen contents yet, so just flag it for later retrieval
+		} else {
+			contents[cref] = nil
+		}
+	}
+	return nil
+}
+
+func saveContents(v *object, contents map[string][]textsection) error {
+	err := v.decodeStream()
+	if err != nil {
+		return err
+	}
+	sections, err := getTextSections(newMemReader(v.stream))
+	if err != nil {
+		return err
+	}
+	contents[v.refString] = sections
+	return nil
+}
+
+func handlePageParent(pItem *page, pageRef string, pagesList map[string]*pages) {
+	if pItem.Parent != "" {
+		if pagesItem, ok := pagesList[pItem.Parent]; ok {
+			if pagesItem.isNull { // null object so add this reference to the list of kids
+				pagesItem.Kids = append(pagesItem.Kids, pageRef)
+			}
+		} else {
+			pagesList[pItem.Parent] = &pages{Kids: []string{pageRef}, isNull: true}
+		}
+	}
+}
+
 func getFont(o *object) *font {
 	font := font{Encoding: o.name("/Encoding")}
 	if u := o.objectref("/ToUnicode"); u != nil {
 		font.ToUnicode = u.refString
 	}
 	return &font
+}
+
+func handleToUnicode(f *font, cmaps map[string]cmap, uncategorized map[string]*object) error {
+	if f.ToUnicode != "" {
+		// cmap already available, so create
+		if u, ok := uncategorized[f.ToUnicode]; ok {
+			if err := saveCmap(u, cmaps); err != nil {
+				return err
+			}
+			delete(uncategorized, f.ToUnicode)
+
+			// haven't seen cmap yet, so just flag for later
+		} else {
+			cmaps[f.ToUnicode] = nil
+		}
+	}
+	return nil
+}
+
+func saveCmap(toUnicode *object, cmaps map[string]cmap) error {
+	if err := toUnicode.decodeStream(); err != nil {
+		return err
+	}
+	cmap, err := getCmap(newMemReader(toUnicode.stream))
+	if err != nil {
+		return err
+	}
+	cmaps[toUnicode.refString] = cmap
+	return nil
 }
 
 func getTextSections(r peekingReader) ([]textsection, error) {

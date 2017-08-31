@@ -367,6 +367,8 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 					t.textArray = append(t.textArray, textArray...)
 					t.textArray = append(t.textArray, " ")
 				}
+			case "T*":
+				t.textArray = append(t.textArray, "\n")
 			case "Tj":
 				if text, ok := stack.Pop().(text); ok {
 					t.textArray = append(t.textArray, text)

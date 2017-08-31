@@ -1,14 +1,9 @@
 package pdf2txt
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 func TestExtract(t *testing.T) {
-	f, _ := os.Open(`testData/Profoto.pdf`)
-
-	if err := extract(f); err != nil {
+	if err := extract(`testData/Profoto.pdf`); err != nil {
 		t.Fatal(err)
 	}
 }

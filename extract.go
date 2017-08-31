@@ -1,19 +1,30 @@
 package pdf2txt
 
-import "io"
-import "io/ioutil"
-
-import "fmt"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
+)
 
 // extract the compressed streams into text files for debugging
-func extract(r io.Reader) error {
+func extract(filename string) error {
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+
+	fileWithoutExt := path.Base(filename)[:len(path.Base(filename))-len(path.Ext(filename))]
+	outDir := path.Join(path.Dir(filename), fileWithoutExt)
+	os.Mkdir(outDir, 0755)
+
 	uncategorized := make(map[string]*object)
 	contents := []string{}
 	fonts := make(map[string]*font)
 	toUnicode := []string{}
 
 	tchan := make(chan interface{}, 15)
-	go tokenize(newBufReader(r), tchan)
+	go tokenize(newBufReader(f), tchan)
 
 	for t := range tchan {
 		switch v := t.(type) {
@@ -37,7 +48,7 @@ func extract(r io.Reader) error {
 				}
 
 			case "/ObjStm":
-				if err := ioutil.WriteFile(fmt.Sprintf("objStm %s.txt", v.refString), v.stream, 0644); err != nil {
+				if err := ioutil.WriteFile(path.Join(outDir, fmt.Sprintf("objStm %s.txt", v.refString)), v.stream, 0644); err != nil {
 					return err
 				}
 				objs, err := v.getObjectStream()
@@ -45,7 +56,7 @@ func extract(r io.Reader) error {
 					return err
 				}
 				for i := range objs {
-					err := ioutil.WriteFile(fmt.Sprintf("decoded %s.txt", objs[i].refString), []byte(fmt.Sprintf("%v", objs[i])), 0644)
+					err := ioutil.WriteFile(path.Join(outDir, fmt.Sprintf("decoded %s.txt", objs[i].refString)), []byte(fmt.Sprintf("%v", objs[i])), 0644)
 					if err != nil {
 						return err
 					}
@@ -62,7 +73,7 @@ func extract(r io.Reader) error {
 		if err := uncategorized[ref].decodeStream(); err != nil {
 			return err
 		}
-		if err := ioutil.WriteFile("toUnicode "+ref+".txt", uncategorized[ref].stream, 0644); err != nil {
+		if err := ioutil.WriteFile(path.Join(outDir, "toUnicode "+ref+".txt"), uncategorized[ref].stream, 0644); err != nil {
 			return err
 		}
 	}
@@ -72,7 +83,7 @@ func extract(r io.Reader) error {
 		if err := uncategorized[ref].decodeStream(); err != nil {
 			return err
 		}
-		if err := ioutil.WriteFile("contents "+ref+".txt", uncategorized[ref].stream, 0644); err != nil {
+		if err := ioutil.WriteFile(path.Join(outDir, "contents "+ref+".txt"), uncategorized[ref].stream, 0644); err != nil {
 			return err
 		}
 	}

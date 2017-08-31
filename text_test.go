@@ -1,8 +1,6 @@
 package pdf2txt
 
 import (
-	"bytes"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -11,11 +9,11 @@ import (
 func TestText(t *testing.T) {
 	f, _ := os.Open(`testData/Kicker.pdf`)
 
-	r, err := Text(f)
+	_, err := Text(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Println(r.(*bytes.Buffer).String())
+	//fmt.Println(r.(*bytes.Buffer).String())
 }
 
 func TestGetText(t *testing.T) {
@@ -33,11 +31,11 @@ func TestGetText(t *testing.T) {
 func TestProfoto(t *testing.T) {
 	f, _ := os.Open(`testData/Profoto.pdf`)
 
-	r, err := Text(f)
+	_, err := Text(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Println(r.(*bytes.Buffer).String())
+	//fmt.Println(r.(*bytes.Buffer).String())
 }
 
 func TestGetTextSections(t *testing.T) {

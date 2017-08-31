@@ -65,7 +65,7 @@ func parse(r io.Reader) (*document, error) {
 	var root rootnode
 
 	tchan := make(chan interface{}, 100)
-	go Tokenize(newBufReader(r), tchan)
+	go tokenize(newBufReader(r), tchan)
 
 	for t := range tchan {
 		switch v := t.(type) {
@@ -169,90 +169,6 @@ func parse(r io.Reader) (*document, error) {
 		contents: contents, uncategorized: uncategorized, root: root}, nil
 }
 
-func (d *document) populate() error {
-	// populate pages objects
-	for i := range d.catalogs {
-		catalog := d.catalogs[i]
-		if _, ok := d.pagesList[catalog.Pages]; !ok {
-			if p, ok := d.uncategorized[catalog.Pages]; ok {
-				d.pagesList[catalog.Pages] = getPages(p)
-				delete(d.uncategorized, catalog.Pages)
-			}
-		}
-
-		// infer page objects from parent property if needed
-		pagesObj := d.pagesList[catalog.Pages]
-		var kids []string
-		if pagesObj != nil && len(pagesObj.Kids) != 0 {
-			kids = pagesObj.Kids
-		} else {
-			for ref := range d.pageList { // NOTE: this will be in random order. Not correct!!!
-				if d.pageList[ref].Parent == ref {
-					kids = append(kids, ref)
-				}
-			}
-			d.pagesList[catalog.Pages] = &pages{Kids: kids}
-		}
-
-		// loop through page objects
-		for pCount := range kids {
-			pageRef := kids[pCount]
-			if d.pageList[pageRef] == nil && d.uncategorized[pageRef] != nil {
-				page := getPage(d.uncategorized[pageRef])
-				d.pageList[pageRef] = page
-				delete(d.uncategorized, pageRef)
-			}
-			page := d.pageList[pageRef]
-			if page == nil {
-				continue
-			}
-
-			// get page contents
-			for cIndex := range page.Contents {
-				contentsRef := page.Contents[cIndex]
-				if c, ok := d.contents[contentsRef]; (!ok || c == nil) && d.uncategorized[contentsRef] != nil {
-					if err := d.uncategorized[contentsRef].decodeStream(); err != nil {
-						return err
-					}
-					c, err := getTextSections(newMemReader(d.uncategorized[contentsRef].stream))
-					if err != nil {
-						return err
-					}
-					d.contents[contentsRef] = c
-					delete(d.uncategorized, contentsRef)
-				}
-			}
-
-			// get page fonts
-			for name := range page.Fonts {
-				fontRef := page.Fonts[name]
-				if _, ok := d.fonts[fontRef]; !ok && d.uncategorized[fontRef] != nil {
-					d.fonts[fontRef] = getFont(d.uncategorized[fontRef])
-					delete(d.uncategorized, fontRef)
-				}
-			}
-		}
-	}
-
-	// populate cmaps
-	for ref := range d.fonts {
-		font := d.fonts[ref]
-		cmapRef := font.ToUnicode
-		if cmap, ok := d.cmaps[cmapRef]; (!ok || cmap == nil) && cmapRef != "" && d.uncategorized[cmapRef] != nil {
-			if err := d.uncategorized[cmapRef].decodeStream(); err != nil {
-				return err
-			}
-			cmap, err := getCmap(newMemReader(d.uncategorized[cmapRef].stream))
-			if err != nil {
-				return err
-			}
-			d.cmaps[cmapRef] = cmap
-			delete(d.uncategorized, cmapRef)
-		}
-	}
-	return nil
-}
-
 func (d *document) getText() (io.Reader, error) {
 	var buf bytes.Buffer
 	for _, pages := range d.pagesList { // get pages objects
@@ -342,7 +258,9 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 	sections := []textsection{}
 	var t textsection
 	var font name
-	stack := stack{}
+	var lastArray array
+	var lastText text
+	var lastName name
 
 	for {
 		item := readNext(r)
@@ -359,27 +277,27 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 			case "BT":
 				t = textsection{}
 			case "Tf":
-				if name, ok := stack.Pop().(name); ok {
-					font = name
-				}
+				font = lastName
 			case "TJ":
-				if textArray, ok := stack.Pop().(array); ok {
-					t.textArray = append(t.textArray, textArray...)
-					t.textArray = append(t.textArray, " ")
-				}
+				t.textArray = append(t.textArray, lastArray...)
+				t.textArray = append(t.textArray, " ")
 			case "T*":
 				t.textArray = append(t.textArray, "\n")
 			case "Tj":
-				if text, ok := stack.Pop().(text); ok {
-					t.textArray = append(t.textArray, text)
-				}
+				t.textArray = append(t.textArray, lastText)
 			case "ET":
 				t.fontName = font // use the current global text state
 				sections = append(sections, t)
 			}
 
-		default:
-			stack.Push(item)
+		case array:
+			lastArray = v
+
+		case text:
+			lastText = v
+
+		case name:
+			lastName = v
 		}
 	}
 }

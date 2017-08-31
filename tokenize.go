@@ -48,7 +48,7 @@ var spaceChars = []byte{'\x00', '\t', '\f', ' ', '\n', '\r'}
 var eolChars = []byte{'\r', '\n'}
 var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/', '%')
 
-// Tokenize reads through the entire PDF document and adds a token
+// tokenize reads through the entire PDF document and adds a token
 // to the tChan every time it encounters a token making it possible to process
 // tokens in parallel
 //
@@ -67,7 +67,7 @@ var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/',
 //   - objectref     : three subsequent tokens "x x R" or "x x obj" (e.g. 250 0 obj)
 //   - textsection   : from BT to ET
 //   - cmap          : from begincmap to endcmap
-func Tokenize(r peekingReader, tChan chan interface{}) {
+func tokenize(r peekingReader, tChan chan interface{}) {
 	var err error
 
 Loop:
@@ -476,10 +476,7 @@ func (o *object) name(n name) name {
 
 func (o *object) int(n name) int {
 	if v, ok := o.search(n).(token); ok {
-		i, err := strconv.Atoi(string(v))
-		if err != nil {
-			return 0
-		}
+		i, _ := strconv.Atoi(string(v))
 		return i
 	}
 	return 0
@@ -495,23 +492,8 @@ func (o *object) search(name name) interface{} {
 	return nil
 }
 
-func (o *object) pages() *objectref {
-	if o.name("/Type") == "/Catalog" { // check to see if it is the root catalog
-		return o.objectref("/Pages")
-	}
-	return nil
-}
-
 func (o *object) streamLength() int {
 	return o.int("/Length")
-}
-
-func (o *object) hasTextStream() bool {
-	if o.stream == nil {
-		return false
-	}
-	t := o.name("/Type")
-	return t == "\x00" || t != "/Font" && t != "/FontDescriptor" && t != "/XRef"
 }
 
 func (o *object) decodeStream() error {

@@ -13,7 +13,7 @@ func extract(r io.Reader) error {
 	toUnicode := []string{}
 
 	tchan := make(chan interface{}, 15)
-	go Tokenize(newBufReader(r), tchan)
+	go tokenize(newBufReader(r), tchan)
 
 	for t := range tchan {
 		switch v := t.(type) {

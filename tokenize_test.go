@@ -6,16 +6,11 @@ import (
 	"testing"
 )
 
-/*func TestDecipher(t *testing.T) {
-	f, _ := os.Open(`testData\page1stream.txt`)
-	parse(f)
-}*/
-
 func TestTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/Kicker.pdf`)
 
 	tChan := make(chan interface{})
-	go Tokenize(newBufReader(f), tChan)
+	go tokenize(newBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -114,7 +109,7 @@ func TestTextTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/132_0.txt`)
 
 	tChan := make(chan interface{})
-	go Tokenize(newBufReader(f), tChan)
+	go tokenize(newBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -130,7 +125,7 @@ func TestCmapTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/257_0.txt`)
 
 	tChan := make(chan interface{})
-	go Tokenize(newBufReader(f), tChan)
+	go tokenize(newBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -146,7 +141,7 @@ func TestProfotoTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/Profoto.pdf`)
 
 	tChan := make(chan interface{})
-	go Tokenize(newBufReader(f), tChan)
+	go tokenize(newBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -162,7 +157,7 @@ func TestProfotoUGTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/ProfotoUserGuide.pdf`)
 
 	tChan := make(chan interface{})
-	go Tokenize(newBufReader(f), tChan)
+	go tokenize(newBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {

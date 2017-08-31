@@ -103,6 +103,35 @@ func TestReadDictionary(t *testing.T) {
 	if tp, ok := actual["/Type"].(name); !ok || tp != "/Page" {
 		t.Error("expected valid /Type", tp)
 	}
+
+	// check for empty value
+	dict = `/Empty>> `
+	actual, err = readDictionary(newMemReader([]byte(dict)))
+
+	if c, ok := actual["/Empty"].(null); !ok || c != null(true) {
+		t.Error("expected valid /Empty")
+	}
+
+	// error on readName
+	dict = `/Empty`
+	actual, err = readDictionary(newMemReader([]byte(dict)))
+	if err != io.EOF {
+		t.Error("expected error")
+	}
+
+	// error on readNext
+	dict = `/Empty 5  0`
+	actual, err = readDictionary(newMemReader([]byte(dict)))
+	if err != io.EOF {
+		t.Error("expected error")
+	}
+
+	// error on Peek
+	dict = `/Empty 5  `
+	actual, err = readDictionary(newMemReader([]byte(dict)))
+	if err != io.EOF {
+		t.Error("expected error")
+	}
 }
 
 func TestTextTokenize(t *testing.T) {

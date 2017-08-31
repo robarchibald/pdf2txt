@@ -66,6 +66,7 @@ func (b *bufReader) ReadBytes(size int) ([]byte, error) {
 	var err error
 	s := make([]byte, size)
 	bSize := b.br.Buffered()
+	actual := size
 	if bSize < size { // pull directly from reader since buffer is too small
 		buf := make([]byte, bSize) // get rest of buffer
 		_, err = b.br.Read(buf)
@@ -74,14 +75,15 @@ func (b *bufReader) ReadBytes(size int) ([]byte, error) {
 		}
 
 		pull := make([]byte, size-bSize) // pull what isn't buffered
-		_, err = b.r.Read(pull)
+		actual, err = b.r.Read(pull)
 		copy(s[:bSize], buf)
 		copy(s[bSize:], pull)
 		b.br.Reset(b.r) // reset buffered reader state
+		actual += bSize // bytes read from underlying reader + buffered bytes
 	} else {
 		_, err = b.br.Read(s)
 	}
-	return s, nil
+	return s[:actual], err // only return the actual valid number of bytes
 }
 
 func readUntil(r peekingReader, endAt byte) ([]byte, error) {

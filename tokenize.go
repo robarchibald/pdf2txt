@@ -445,8 +445,7 @@ func readDictionary(r peekingReader) (dictionary, error) {
 		}
 		d[name] = item
 
-		err = skipSpaces(r)
-		if err != nil {
+		if err = skipSpaces(r); err != nil {
 			return nil, err
 		}
 		p, err := r.Peek(2)

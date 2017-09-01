@@ -49,15 +49,14 @@ func extract(filename string) error {
 				}
 
 			case "/ObjStm":
-				if decodeError != nil {
-					continue
-				}
-				if err := v.decodeStream(); err != nil {
-					decodeError = err
-					continue
+				if decodeError == nil {
+					decodeError = v.decodeStream()
 				}
 				if err := ioutil.WriteFile(path.Join(outDir, fmt.Sprintf("objStm %s.txt", v.refString)), v.stream, 0644); err != nil {
 					return err
+				}
+				if decodeError != nil {
+					continue
 				}
 				objs, err := v.getObjectStream()
 				if err != nil {

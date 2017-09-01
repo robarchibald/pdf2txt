@@ -17,7 +17,9 @@ type document struct {
 	cmaps         map[string]cmap
 	contents      map[string][]textsection
 	uncategorized map[string]*object
-	root          rootnode
+	objectstreams map[string]*object
+	trailer       *trailer
+	decodeError   error
 }
 
 type catalog struct {
@@ -48,6 +50,9 @@ func Text(r io.Reader) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+	if d.decodeError != nil {
+		fmt.Println("looks encrypted", d.decodeError)
+	}
 	//	if err = d.populate(); err != nil {
 	//return nil, err
 	//}
@@ -55,68 +60,96 @@ func Text(r io.Reader) (io.Reader, error) {
 }
 
 func parse(r io.Reader) (*document, error) {
-	catalogs := []*catalog{}
-	pagesList := make(map[string]*pages)
-	pageList := make(map[string]*page)
-	fonts := make(map[string]*font)
-	cmaps := make(map[string]cmap)
-	contents := make(map[string][]textsection)
-	uncategorized := make(map[string]*object)
-	var root rootnode
+	doc := &document{catalogs: []*catalog{}, pagesList: make(map[string]*pages), pageList: make(map[string]*page),
+		fonts: make(map[string]*font), cmaps: make(map[string]cmap), contents: make(map[string][]textsection),
+		objectstreams: make(map[string]*object), uncategorized: make(map[string]*object), trailer: &trailer{}}
 
 	tchan := make(chan interface{}, 100)
 	go tokenize(newBufReader(r), tchan)
 
 	for t := range tchan {
-		switch v := t.(type) {
-		case rootnode:
-			root = v
-		case *object:
-			oType := v.name("/Type")
-			switch oType {
-			case "/Catalog":
-				catalogs = append(catalogs, &catalog{v.objectref("/Pages").refString})
+		if err := parseItem(t, doc); err != nil {
+			return nil, err
+		}
+	}
+	return doc, nil
+}
 
-			case "/Pages":
-				pagesList[v.refString] = v.getPages()
+func parseItem(item interface{}, doc *document) error {
+	switch v := item.(type) {
+	case error:
+		return v
+	case *trailer:
+		doc.trailer = v
+	case *object:
+		oType := v.name("/Type")
+		switch oType {
+		case "/Catalog":
+			doc.catalogs = append(doc.catalogs, &catalog{v.objectref("/Pages").refString})
 
-			case "/Page":
-				pItem := v.getPage()
-				pageList[v.refString] = pItem
-				if err := handlePageContents(pItem, contents, uncategorized); err != nil {
-					return nil, err
+		case "/Pages":
+			doc.pagesList[v.refString] = v.getPages()
+
+		case "/Page":
+			pItem := v.getPage()
+			doc.pageList[v.refString] = pItem
+			handlePageParent(pItem, v.refString, doc.pagesList)
+			if doc.decodeError != nil {
+				return nil
+			}
+			if err := handlePageContents(pItem, doc.contents, doc.uncategorized); err != nil {
+				return err
+			}
+
+		case "/Font":
+			f := v.getFont()
+			doc.fonts[v.refString] = f
+			if doc.decodeError != nil {
+				return nil
+			}
+			if err := handleToUnicode(f, doc.cmaps, doc.uncategorized); err != nil {
+				doc.decodeError = err
+			}
+
+		case "/ObjStm":
+			if doc.decodeError != nil {
+				doc.objectstreams[v.refString] = v
+				return nil
+			}
+			err := v.decodeStream()
+			if err != nil {
+				doc.objectstreams[v.refString] = v
+				doc.decodeError = err
+				return nil
+			}
+			objs, err := v.getObjectStream()
+			if err != nil {
+				return err
+			}
+			for i := range objs {
+				parseItem(objs[i], doc)
+			}
+
+		case "/XObject": // we don't need
+		case "/FontDescriptor": // we don't need
+		default:
+			// something has already referenced this as content so save as content
+			if _, ok := doc.contents[v.refString]; ok && doc.decodeError == nil {
+				if err := v.saveContents(doc.contents); err != nil {
+					doc.decodeError = err
 				}
-				handlePageParent(pItem, v.refString, pagesList)
 
-			case "/Font":
-				f := v.getFont()
-				fonts[v.refString] = f
-				if err := handleToUnicode(f, cmaps, uncategorized); err != nil {
-					return nil, err
+				// save cmap
+			} else if _, ok := doc.cmaps[v.refString]; ok && doc.decodeError == nil {
+				if err := v.saveCmap(doc.cmaps); err != nil {
+					doc.decodeError = err
 				}
-
-			case "/XObject": // we don't need
-			case "/FontDescriptor": // we don't need
-			default:
-				// something has already referenced this as content so save as content
-				if _, ok := contents[v.refString]; ok {
-					if err := v.saveContents(contents); err != nil {
-						return nil, err
-					}
-
-					// save cmap
-				} else if _, ok := cmaps[v.refString]; ok {
-					if err := v.saveCmap(cmaps); err != nil {
-						return nil, err
-					}
-				} else {
-					uncategorized[v.refString] = v
-				}
+			} else {
+				doc.uncategorized[v.refString] = v
 			}
 		}
 	}
-	return &document{catalogs: catalogs, pagesList: pagesList, pageList: pageList, fonts: fonts, cmaps: cmaps,
-		contents: contents, uncategorized: uncategorized, root: root}, nil
+	return nil
 }
 
 func (d *document) getText() (io.Reader, error) {

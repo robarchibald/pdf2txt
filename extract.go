@@ -22,6 +22,7 @@ func extract(filename string) error {
 	contents := []string{}
 	fonts := make(map[string]*font)
 	toUnicode := []string{}
+	var decodeError error
 
 	tchan := make(chan interface{}, 15)
 	go tokenize(newBufReader(f), tchan)
@@ -48,6 +49,13 @@ func extract(filename string) error {
 				}
 
 			case "/ObjStm":
+				if decodeError != nil {
+					continue
+				}
+				if err := v.decodeStream(); err != nil {
+					decodeError = err
+					continue
+				}
 				if err := ioutil.WriteFile(path.Join(outDir, fmt.Sprintf("objStm %s.txt", v.refString)), v.stream, 0644); err != nil {
 					return err
 				}

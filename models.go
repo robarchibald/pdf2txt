@@ -3,7 +3,6 @@ package pdf2txt
 import (
 	"bytes"
 	"compress/zlib"
-	"errors"
 	"fmt"
 	"strconv"
 )
@@ -163,14 +162,11 @@ func (o *object) decodeStream() error {
 	}
 }
 
-func (o *object) isObjectStream() bool {
-	return o.name("/Type") == "/ObjStm"
+func (o *object) isTrailer() bool {
+	return o.objectref("/Root") != nil
 }
 
 func (o *object) getObjectStream() ([]*object, error) {
-	if !o.isObjectStream() {
-		return nil, errors.New("not a valid object stream")
-	}
 	n := o.search("/N").(token)
 	numObjs, _ := strconv.Atoi(string(n))
 

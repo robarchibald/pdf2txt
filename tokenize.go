@@ -22,10 +22,14 @@ type null bool
 type end byte
 type xref map[string]xrefItem
 type cmap map[hexdata]string
-type rootnode string
 type objectref struct {
 	refString string
 	refType   string
+}
+type trailer struct {
+	rootnode    *objectref
+	decodeParms dictionary
+	encrypt     *objectref
 }
 type object struct {
 	refString       string
@@ -85,19 +89,15 @@ Loop:
 				if err != nil {
 					break Loop
 				}
-				if obj.isObjectStream() {
-					var objs []*object
-					err = obj.decodeStream()
-					if err != nil {
-						break Loop
+				if obj.isTrailer() {
+					t := &trailer{}
+					if d, ok := obj.search("/DecodeParms").(dictionary); ok {
+						t.decodeParms = d
 					}
-					objs, err = obj.getObjectStream()
-					if err != nil {
-						break Loop
-					}
-					for i := range objs {
-						tChan <- objs[i]
-					}
+					t.encrypt = obj.objectref("/Encrypt")
+					t.rootnode = obj.objectref("/Root")
+					tChan <- t
+					continue
 				}
 				tChan <- obj
 			}
@@ -113,12 +113,12 @@ Loop:
 				tChan <- xref
 
 			case "trailer":
-				var trailer rootnode
-				trailer, err = readTrailer(r)
+				var pdfTrailer *trailer
+				pdfTrailer, err = readTrailer(r)
 				if err != nil {
 					break Loop
 				}
-				tChan <- trailer
+				tChan <- pdfTrailer
 			default: // send out other tokens
 				tChan <- v
 			}
@@ -210,17 +210,25 @@ func readXref(r peekingReader) (xref, error) {
 	}
 }
 
-func readTrailer(r peekingReader) (rootnode, error) {
+func readTrailer(r peekingReader) (*trailer, error) {
 	for {
 		item := readNext(r)
 		switch v := item.(type) {
 		case error:
-			return "\x00", v
+			return nil, v
 
 		case dictionary:
-			if r, ok := v["/Root"].(*objectref); ok {
-				return rootnode(r.refString), nil
+			t := &trailer{}
+			if d, ok := v["/DecodeParms"].(dictionary); ok {
+				t.decodeParms = d
 			}
+			if r, ok := v["/Root"].(*objectref); ok {
+				t.rootnode = r
+			}
+			if e, ok := v["/Encrypt"].(*objectref); ok {
+				t.encrypt = e
+			}
+			return t, nil
 		}
 	}
 }

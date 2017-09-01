@@ -53,6 +53,7 @@ func TestProfotoUG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	//fmt.Println(r.(*bytes.Buffer).String())
 }
 
 func TestGetObjectStream(t *testing.T) {

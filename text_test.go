@@ -1,9 +1,16 @@
 package pdf2txt
 
 import (
+	"bytes"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"testing"
+
+	"github.com/EndFirstCorp/pdflib"
+	"github.com/ledongthuc/pdf"
+	pdfcontent "github.com/unidoc/unidoc/pdf/contentstream"
+	updf "github.com/unidoc/unidoc/pdf/model"
 )
 
 func TestText(t *testing.T) {
@@ -64,4 +71,89 @@ func TestGetObjectStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func BenchmarkUnidoc(t *testing.B) {
+	f, err := os.Open(`testData/Kicker.pdf`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer f.Close()
+
+	pdfReader, err := updf.NewPdfReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	isEncrypted, err := pdfReader.IsEncrypted()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if isEncrypted {
+		_, err = pdfReader.Decrypt([]byte(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	numPages, err := pdfReader.GetNumPages()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < numPages; i++ {
+		pageNum := i + 1
+
+		page, err := pdfReader.GetPage(pageNum)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		contentStreams, err := page.GetContentStreams()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// If the value is an array, the effect shall be as if all of the streams in the array were concatenated,
+		// in order, to form a single stream.
+		pageContentStr := ""
+		for _, cstream := range contentStreams {
+			pageContentStr += cstream
+		}
+
+		cstreamParser := pdfcontent.NewContentStreamParser(pageContentStr)
+		_, err = cstreamParser.ExtractText()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		//fmt.Printf("%s\n", txt)
+	}
+}
+
+func BenchmarkRscPdf(t *testing.B) {
+	pdf, _ := pdf.Open(`testData/Kicker.pdf`)
+	pdf.GetPlainText()
+	//fmt.Println(r.(*bytes.Buffer).String())
+}
+
+func BenchmarkEndFirst(t *testing.B) {
+	f, _ := os.Open(`testData/Kicker.pdf`)
+	Text(f)
+}
+
+func BenchmarkPdfLib(t *testing.B) {
+	r, err := pdflib.ExtractText(`testData/Kicker.pdf`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println(r.(*bytes.Buffer).String())
+	/*	ctx, _ := pdflib.Read(`testData/ProfotoUserGuide.pdf`, nil)
+		r, err := extract.Text(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println(r.(*bytes.Buffer).String())*/
 }

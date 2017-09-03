@@ -27,9 +27,9 @@ type objectref struct {
 	refType   string
 }
 type trailer struct {
-	rootnode    *objectref
+	rootRef     string
 	decodeParms dictionary
-	encrypt     *objectref
+	encryptRef  string
 }
 type object struct {
 	refString       string
@@ -94,8 +94,12 @@ Loop:
 					if d, ok := obj.search("/DecodeParms").(dictionary); ok {
 						t.decodeParms = d
 					}
-					t.encrypt = obj.objectref("/Encrypt")
-					t.rootnode = obj.objectref("/Root")
+					if e := obj.objectref("/Encrypt"); e != nil {
+						t.encryptRef = e.refString
+					}
+					if r := obj.objectref("/Root"); r != nil {
+						t.rootRef = r.refString
+					}
 					tChan <- t
 					continue
 				}
@@ -223,10 +227,10 @@ func readTrailer(r peekingReader) (*trailer, error) {
 				t.decodeParms = d
 			}
 			if r, ok := v["/Root"].(*objectref); ok {
-				t.rootnode = r
+				t.rootRef = r.refString
 			}
 			if e, ok := v["/Encrypt"].(*objectref); ok {
-				t.encrypt = e
+				t.encryptRef = e.refString
 			}
 			return t, nil
 		}

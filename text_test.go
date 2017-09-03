@@ -23,6 +23,16 @@ func TestText(t *testing.T) {
 	//fmt.Println(r.(*bytes.Buffer).String())
 }
 
+func TestSamsung(t *testing.T) {
+	f, _ := os.Open(`testData/samsung.pdf`)
+
+	_, err := Text(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	//fmt.Println(r.(*bytes.Buffer).String())
+}
+
 func TestGetText(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/132_0.txt`)
 

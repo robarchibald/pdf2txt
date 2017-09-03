@@ -10,7 +10,7 @@ import (
 )
 
 type document struct {
-	catalogs      []*catalog
+	catalogs      map[string]*catalog
 	pagesList     map[string]*pages
 	pageList      map[string]*page
 	fonts         map[string]*font
@@ -60,7 +60,7 @@ func Text(r io.Reader) (io.Reader, error) {
 }
 
 func parse(r io.Reader) (*document, error) {
-	doc := &document{catalogs: []*catalog{}, pagesList: make(map[string]*pages), pageList: make(map[string]*page),
+	doc := &document{catalogs: make(map[string]*catalog), pagesList: make(map[string]*pages), pageList: make(map[string]*page),
 		fonts: make(map[string]*font), cmaps: make(map[string]cmap), contents: make(map[string][]textsection),
 		objectstreams: make(map[string]*object), uncategorized: make(map[string]*object), trailer: &trailer{}}
 
@@ -80,12 +80,20 @@ func parseItem(item interface{}, doc *document) error {
 	case error:
 		return v
 	case *trailer:
-		doc.trailer = v
+		if v.rootRef != "" {
+			doc.trailer.rootRef = v.rootRef
+		}
+		if v.decodeParms != nil {
+			doc.trailer.decodeParms = v.decodeParms
+		}
+		if v.encryptRef != "" {
+			doc.trailer.encryptRef = v.encryptRef
+		}
 	case *object:
 		oType := v.name("/Type")
 		switch oType {
 		case "/Catalog":
-			doc.catalogs = append(doc.catalogs, &catalog{v.objectref("/Pages").refString})
+			doc.catalogs[v.refString] = &catalog{v.objectref("/Pages").refString}
 
 		case "/Pages":
 			doc.pagesList[v.refString] = v.getPages()
@@ -152,19 +160,41 @@ func parseItem(item interface{}, doc *document) error {
 	return nil
 }
 
+// according to the spec, we are supposed to read the trailer to find the
+// root pages object and then iterate through children to find all children
 func (d *document) getText() (io.Reader, error) {
 	var buf bytes.Buffer
-	for _, pages := range d.pagesList { // get pages objects
-		for _, pageRef := range pages.Kids { // get page objects
-			buf.WriteString(d.getPageText(d.pageList[pageRef]))
-			buf.WriteString("\n")
-		}
+	catalog, ok := d.catalogs[d.trailer.rootRef]
+	if !ok {
+		return nil, errors.New("unable to find catalog")
+	}
+
+	for _, page := range d.getPages(catalog.Pages) { // get page objects
+		buf.WriteString(d.getPageText(page))
+		buf.WriteString("\n")
 	}
 	return &buf, nil
 }
 
+// Loop through pages and page nodes to get all the pages
+func (d *document) getPages(refString string) []*page {
+	if node, ok := d.pagesList[refString]; ok { // this is a pages node so loop through kids
+		var pages []*page
+		for i := range node.Kids {
+			pages = append(pages, d.getPages(node.Kids[i])...)
+		}
+		return pages
+	} else if node, ok := d.pageList[refString]; ok { // this is a page node so return page
+		return []*page{node}
+	}
+	return []*page{}
+}
+
 func (d *document) getPageText(p *page) string {
 	var buf bytes.Buffer
+	if p == nil || p.Contents == nil {
+		fmt.Println("nil p")
+	}
 	for _, cref := range p.Contents { // get content
 		c := d.contents[cref]
 		for sIndex := range c { // get text sections

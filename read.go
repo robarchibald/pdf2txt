@@ -2,6 +2,7 @@ package pdf2txt
 
 import (
 	"bufio"
+	"errors"
 	"io"
 )
 
@@ -63,27 +64,33 @@ func (b *bufReader) ReadByte() (byte, error) {
 }
 
 func (b *bufReader) ReadBytes(size int) ([]byte, error) {
-	var err error
 	s := make([]byte, size)
-	bSize := b.br.Buffered()
-	actual := size
-	if bSize < size { // pull directly from reader since buffer is too small
-		buf := make([]byte, bSize) // get rest of buffer
-		_, err = b.br.Read(buf)
+	actual := b.br.Buffered()
+	if actual < size { // pull directly from reader since buffer is too small
+		buf := make([]byte, actual) // get rest of buffer
+		l, err := b.br.Read(buf)
 		if err != nil {
 			return nil, err
 		}
+		if l != actual {
+			return nil, errors.New("couldn't get all of remaining buffer")
+		}
+		copy(s[:actual], buf)
 
-		pull := make([]byte, size-bSize) // pull what isn't buffered
-		actual, err = b.r.Read(pull)
-		copy(s[:bSize], buf)
-		copy(s[bSize:], pull)
+		for actual != size { // may need to read more than once to get full amount
+			pull := make([]byte, size-actual) // pull what is left
+			pSize, err := b.r.Read(pull)
+			if err != nil {
+				return nil, err
+			}
+			copy(s[actual:], pull)
+			actual += pSize // bytes read from underlying reader + buffered bytes
+		}
 		b.br.Reset(b.r) // reset buffered reader state
-		actual += bSize // bytes read from underlying reader + buffered bytes
-	} else {
-		_, err = b.br.Read(s)
+		return s, nil
 	}
-	return s[:actual], err // only return the actual valid number of bytes
+	_, err := b.br.Read(s)
+	return s, err // only return the actual valid number of bytes
 }
 
 func readUntil(r peekingReader, endAt byte) ([]byte, error) {

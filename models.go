@@ -137,7 +137,7 @@ func (o *object) decodeStream() error {
 	//case "/LZWDecode":
 
 	case "/FlateDecode":
-		buf := bytes.NewBuffer(o.stream)
+		buf := bytes.NewReader(o.stream)
 		r, err := zlib.NewReader(buf)
 		if err != nil {
 			return err

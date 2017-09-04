@@ -51,7 +51,7 @@ func Text(r io.Reader) (io.Reader, error) {
 		return nil, err
 	}
 	if d.decodeError != nil {
-		fmt.Println("looks encrypted", d.decodeError)
+		return nil, d.decodeError
 	}
 	//	if err = d.populate(); err != nil {
 	//return nil, err

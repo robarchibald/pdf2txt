@@ -33,6 +33,16 @@ func TestSamsung(t *testing.T) {
 	//fmt.Println(r.(*bytes.Buffer).String())
 }
 
+func TestGetTextsection(t *testing.T) {
+	b, _ := ioutil.ReadFile(`testData/contents-v1.4.txt`)
+
+	s, err := getTextSections(newMemReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println(s)
+}
+
 func TestGetText(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/132_0.txt`)
 

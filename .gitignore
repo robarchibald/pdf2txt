@@ -5,12 +5,13 @@
 *.dylib
 
 # Test binary, build with `go test -c`
-*.test
+*.test*
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 testData/Profoto
 testData/ProfotoUserGuide
+testData/samsung
 
 # Project-local glide cache, RE: https://github.com/Masterminds/glide/issues/736
 .glide/

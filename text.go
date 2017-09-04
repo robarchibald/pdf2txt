@@ -274,11 +274,10 @@ func handleToUnicode(f *font, cmaps map[string]cmap, uncategorized map[string]*o
 
 func getTextSections(r peekingReader) ([]textsection, error) {
 	sections := []textsection{}
-	var t textsection
 	var font name
-	var lastArray array
-	var lastText text
-	var lastName name
+	var prevArray array
+	var prev interface{}
+	var prevName name
 
 	for {
 		item := readNext(r)
@@ -292,28 +291,22 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 
 		case token:
 			switch v {
-			case "BT":
-				t = textsection{}
 			case "Tf":
-				font = lastName
+				font = prevName
 			case "TJ":
-				t.textArray = append(t.textArray, lastArray...)
-				t.textArray = append(t.textArray, " ")
+				sections = append(sections, textsection{fontName: font, textArray: append(prevArray, " ")})
 			case "T*":
-				t.textArray = append(t.textArray, "\n")
+				sections = append(sections, textsection{fontName: font, textArray: []interface{}{"\n"}})
 			case "Tj":
-				t.textArray = append(t.textArray, lastText)
-			case "ET":
-				t.fontName = font // use the current global text state
-				sections = append(sections, t)
+				sections = append(sections, textsection{fontName: font, textArray: []interface{}{prev}})
 			}
 
 		case array:
-			lastArray = v
-		case text:
-			lastText = v
+			prevArray = v
+		case text, hexdata:
+			prev = v
 		case name:
-			lastName = v
+			prevName = v
 		}
 	}
 }

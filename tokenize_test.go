@@ -132,6 +132,16 @@ func TestReadDictionary(t *testing.T) {
 	if err != io.EOF {
 		t.Error("expected error")
 	}
+
+	// check to make sure it works with spaces between names
+	dict = `/Type /Catalog
+/Outlines 2 0 R
+/Pages 6 0 R
+>>`
+	actual, _ = readDictionary(newMemReader([]byte(dict)))
+	if actual != nil {
+		t.Error("expected valid dictionary")
+	}
 }
 
 func TestTextTokenize(t *testing.T) {

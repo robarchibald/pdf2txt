@@ -441,6 +441,9 @@ func readName(r peekingReader) (name, error) {
 func readDictionary(r peekingReader) (dictionary, error) {
 	d := make(dictionary)
 	for {
+		if err := skipSpaces(r); err != nil {
+			return nil, err
+		}
 		name, err := readName(r)
 		if err != nil {
 			return nil, err

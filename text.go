@@ -7,6 +7,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/EndFirstCorp/peekingReader"
 )
 
 type document struct {
@@ -65,7 +67,7 @@ func parse(r io.Reader) (*document, error) {
 		objectstreams: make(map[string]*object), uncategorized: make(map[string]*object), trailer: &trailer{}}
 
 	tchan := make(chan interface{}, 100)
-	go tokenize(newBufReader(r), tchan)
+	go tokenize(peekingReader.NewBufReader(r), tchan)
 
 	for t := range tchan {
 		if err := parseItem(t, doc); err != nil {
@@ -93,7 +95,11 @@ func parseItem(item interface{}, doc *document) error {
 		oType := v.name("/Type")
 		switch oType {
 		case "/Catalog":
-			doc.catalogs[v.refString] = &catalog{v.objectref("/Pages").refString}
+			pages := v.objectref("/Pages")
+			if pages == nil {
+				return errors.New("Invalid catalog. Pages not found")
+			}
+			doc.catalogs[v.refString] = &catalog{pages.refString}
 
 		case "/Pages":
 			doc.pagesList[v.refString] = v.getPages()
@@ -272,7 +278,7 @@ func handleToUnicode(f *font, cmaps map[string]cmap, uncategorized map[string]*o
 	return nil
 }
 
-func getTextSections(r peekingReader) ([]textsection, error) {
+func getTextSections(r peekingReader.Reader) ([]textsection, error) {
 	sections := []textsection{}
 	var font name
 	var prevArray array
@@ -311,7 +317,7 @@ func getTextSections(r peekingReader) ([]textsection, error) {
 	}
 }
 
-func getCmap(r peekingReader) (cmap, error) {
+func getCmap(r peekingReader.Reader) (cmap, error) {
 	cmap := make(cmap)
 	var prev token
 
@@ -357,7 +363,7 @@ func getCmap(r peekingReader) (cmap, error) {
 	}
 }
 
-func readbfchar(r peekingReader, length token) (cmap, error) {
+func readbfchar(r peekingReader.Reader, length token) (cmap, error) {
 	cmap := make(cmap)
 	l, _ := strconv.Atoi(string(length))
 	var lastKey hexdata
@@ -385,7 +391,7 @@ func readbfchar(r peekingReader, length token) (cmap, error) {
 	return cmap, nil
 }
 
-func readbfrange(r peekingReader, length token) (cmap, error) {
+func readbfrange(r peekingReader.Reader, length token) (cmap, error) {
 	cmap := make(cmap)
 	l, _ := strconv.Atoi(string(length))
 	var start, end int64

@@ -5,6 +5,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+
+	"github.com/EndFirstCorp/peekingReader"
 )
 
 // extract the compressed streams into text files for debugging
@@ -25,7 +27,7 @@ func extract(filename string) error {
 	var decodeError error
 
 	tchan := make(chan interface{}, 15)
-	go tokenize(newBufReader(f), tchan)
+	go tokenize(peekingReader.NewBufReader(f), tchan)
 
 	for t := range tchan {
 		switch v := t.(type) {
@@ -83,6 +85,7 @@ func extract(filename string) error {
 		if err := ioutil.WriteFile(path.Join(outDir, "toUnicode "+ref+".txt"), uncategorized[ref].stream, 0644); err != nil {
 			return err
 		}
+		delete(uncategorized, ref)
 	}
 
 	for i := range contents {
@@ -91,6 +94,16 @@ func extract(filename string) error {
 			return err
 		}
 		if err := ioutil.WriteFile(path.Join(outDir, "contents "+ref+".txt"), uncategorized[ref].stream, 0644); err != nil {
+			return err
+		}
+		delete(uncategorized, ref)
+	}
+
+	for ref, item := range uncategorized {
+		if err := item.decodeStream(); err != nil {
+			return err
+		}
+		if err := ioutil.WriteFile(path.Join(outDir, "uncategorized "+ref+".txt"), item.stream, 0644); err != nil {
 			return err
 		}
 	}

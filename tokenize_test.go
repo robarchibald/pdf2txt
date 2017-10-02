@@ -4,13 +4,15 @@ import (
 	"io"
 	"os"
 	"testing"
+
+	"github.com/EndFirstCorp/peekingReader"
 )
 
 func TestTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/Kicker.pdf`)
 
 	tChan := make(chan interface{})
-	go tokenize(newBufReader(f), tChan)
+	go tokenize(peekingReader.NewBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -25,7 +27,7 @@ func TestTokenize(t *testing.T) {
 func TestReadDictionary(t *testing.T) {
 	// dictionary string without leading << since those have been removed before readDictionary gets it
 	dict := `/BleedBox[0.0 0.0 839.055 595.276]/Contents 2 0 R/CropBox[0.0 0.0 839.055 595.276]/MediaBox[0.0 0.0 839.055 595.276]/Parent 37 0 R/Resources<</ExtGState<</GS0 35 0 R/GS1 57 0 R>>/Font<</T1_0 32 0 R/T1_1 59 0 R>>/ProcSet[/PDF/Text/ImageC]/XObject<</Im0 3 0 R/Im1 4 0 R>>>>/Rotate 0/TrimBox[0.0 0.0 839.055 595.276]/Type/Page>> `
-	actual, err := readDictionary(newMemReader([]byte(dict)))
+	actual, err := readDictionary(peekingReader.NewMemReader([]byte(dict)))
 	if err != nil && err != io.EOF {
 		t.Fatal("expected success", err)
 	}
@@ -106,7 +108,7 @@ func TestReadDictionary(t *testing.T) {
 
 	// check for empty value
 	dict = `/Empty>> `
-	actual, err = readDictionary(newMemReader([]byte(dict)))
+	actual, err = readDictionary(peekingReader.NewMemReader([]byte(dict)))
 
 	if c, ok := actual["/Empty"].(null); !ok || c != null(true) {
 		t.Error("expected valid /Empty")
@@ -114,21 +116,21 @@ func TestReadDictionary(t *testing.T) {
 
 	// error on readName
 	dict = `/Empty`
-	actual, err = readDictionary(newMemReader([]byte(dict)))
+	actual, err = readDictionary(peekingReader.NewMemReader([]byte(dict)))
 	if err != io.EOF {
 		t.Error("expected error")
 	}
 
 	// error on readNext
 	dict = `/Empty 5  0`
-	actual, err = readDictionary(newMemReader([]byte(dict)))
+	actual, err = readDictionary(peekingReader.NewMemReader([]byte(dict)))
 	if err != io.EOF {
 		t.Error("expected error")
 	}
 
 	// error on Peek
 	dict = `/Empty 5  `
-	actual, err = readDictionary(newMemReader([]byte(dict)))
+	actual, err = readDictionary(peekingReader.NewMemReader([]byte(dict)))
 	if err != io.EOF {
 		t.Error("expected error")
 	}
@@ -138,7 +140,7 @@ func TestReadDictionary(t *testing.T) {
 /Outlines 2 0 R
 /Pages 6 0 R
 >>`
-	actual, _ = readDictionary(newMemReader([]byte(dict)))
+	actual, _ = readDictionary(peekingReader.NewMemReader([]byte(dict)))
 	if actual != nil {
 		t.Error("expected valid dictionary")
 	}
@@ -148,7 +150,7 @@ func TestTextTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/132_0.txt`)
 
 	tChan := make(chan interface{})
-	go tokenize(newBufReader(f), tChan)
+	go tokenize(peekingReader.NewBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -164,7 +166,7 @@ func TestCmapTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/257_0.txt`)
 
 	tChan := make(chan interface{})
-	go tokenize(newBufReader(f), tChan)
+	go tokenize(peekingReader.NewBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -180,7 +182,7 @@ func TestProfotoTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/Profoto.pdf`)
 
 	tChan := make(chan interface{})
-	go tokenize(newBufReader(f), tChan)
+	go tokenize(peekingReader.NewBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {
@@ -196,7 +198,7 @@ func TestProfotoUGTokenize(t *testing.T) {
 	f, _ := os.Open(`testData/ProfotoUserGuide.pdf`)
 
 	tChan := make(chan interface{})
-	go tokenize(newBufReader(f), tChan)
+	go tokenize(peekingReader.NewBufReader(f), tChan)
 
 	count := 0
 	for c := range tChan {

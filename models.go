@@ -5,6 +5,8 @@ import (
 	"compress/zlib"
 	"fmt"
 	"strconv"
+
+	"github.com/EndFirstCorp/peekingReader"
 )
 
 func (o *object) getFont() *font {
@@ -171,7 +173,7 @@ func (o *object) getObjectStream() ([]*object, error) {
 	numObjs, _ := strconv.Atoi(string(n))
 
 	objs := make([]*object, numObjs)
-	r := newMemReader(o.stream)
+	r := peekingReader.NewMemReader(o.stream)
 	for i := 0; i < numObjs; i++ {
 		number := readNext(r)
 		refString := fmt.Sprintf("%v 0", number)
@@ -198,7 +200,7 @@ func (o *object) saveContents(contents map[string][]textsection) error {
 	if err != nil {
 		return err
 	}
-	sections, err := getTextSections(newMemReader(o.stream))
+	sections, err := getTextSections(peekingReader.NewMemReader(o.stream))
 	if err != nil {
 		return err
 	}
@@ -210,7 +212,7 @@ func (o *object) saveCmap(cmaps map[string]cmap) error {
 	if err := o.decodeStream(); err != nil {
 		return err
 	}
-	cmap, err := getCmap(newMemReader(o.stream))
+	cmap, err := getCmap(peekingReader.NewMemReader(o.stream))
 	if err != nil {
 		return err
 	}

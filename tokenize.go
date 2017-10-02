@@ -6,6 +6,8 @@ import (
 	"io"
 	"strconv"
 
+	"github.com/EndFirstCorp/peekingReader"
+
 	"github.com/pkg/errors"
 )
 
@@ -70,7 +72,7 @@ var delimChars = append(spaceChars, '(', ')', '<', '>', '[', ']', '{', '}', '/',
 //   - objectref     : three subsequent tokens "x x R" or "x x obj" (e.g. 250 0 obj)
 //   - textsection   : from BT to ET
 //   - cmap          : from begincmap to endcmap
-func tokenize(r peekingReader, tChan chan interface{}) {
+func tokenize(r peekingReader.Reader, tChan chan interface{}) {
 	var err error
 
 Loop:
@@ -138,7 +140,7 @@ Loop:
 	close(tChan)
 }
 
-func readObject(r peekingReader, ref *objectref) (*object, error) {
+func readObject(r peekingReader.Reader, ref *objectref) (*object, error) {
 	o := object{refString: ref.refString}
 	for {
 		item := readNext(r)
@@ -172,7 +174,7 @@ func readObject(r peekingReader, ref *objectref) (*object, error) {
 	}
 }
 
-func readXref(r peekingReader) (xref, error) {
+func readXref(r peekingReader.Reader) (xref, error) {
 	var xrefStart, xrefEnd int
 	var xref xref
 	var number int
@@ -214,7 +216,7 @@ func readXref(r peekingReader) (xref, error) {
 	}
 }
 
-func readTrailer(r peekingReader) (*trailer, error) {
+func readTrailer(r peekingReader.Reader) (*trailer, error) {
 	for {
 		item := readNext(r)
 		switch v := item.(type) {
@@ -237,7 +239,7 @@ func readTrailer(r peekingReader) (*trailer, error) {
 	}
 }
 
-func readNext(r peekingReader) interface{} {
+func readNext(r peekingReader.Reader) interface{} {
 	b, err := r.ReadByte()
 	if err != nil {
 		return err
@@ -263,7 +265,7 @@ func readNext(r peekingReader) interface{} {
 			return d
 		}
 
-		v, err := readUntil(r, '>')
+		v, err := peekingReader.ReadUntil(r, '>')
 		if err != nil {
 			return err
 		}
@@ -276,7 +278,7 @@ func readNext(r peekingReader) interface{} {
 		}
 		return v
 	case '{':
-		v, err := readUntil(r, '}')
+		v, err := peekingReader.ReadUntil(r, '}')
 		if err != nil {
 			return err
 		}
@@ -289,13 +291,13 @@ func readNext(r peekingReader) interface{} {
 		}
 		return v
 	case '%':
-		v, err := readUntilAny(r, eolChars) // make into readComment
+		v, err := peekingReader.ReadUntilAny(r, eolChars) // make into readComment
 		if err != nil {
 			return err
 		}
 		return comment(v)
 	case '\x00', '\t', '\f', ' ', '\n', '\r':
-		err := skipSpaces(r)
+		err := peekingReader.SkipSpaces(r)
 		if err != nil {
 			return err
 		}
@@ -327,7 +329,7 @@ func isNumber(b byte) bool {
 	return b >= '0' && b <= '9'
 }
 
-func readArray(r peekingReader) (array, error) {
+func readArray(r peekingReader.Reader) (array, error) {
 	items := array{}
 	for {
 		item := readNext(r)
@@ -349,14 +351,14 @@ func readArray(r peekingReader) (array, error) {
 	}
 }
 
-func readText(r peekingReader) (text, error) {
-	v, err := readUntil(r, ')')
+func readText(r peekingReader.Reader) (text, error) {
+	v, err := peekingReader.ReadUntil(r, ')')
 	if err != nil {
 		return nil, err
 	}
 	r.ReadByte()                          // move read pointer past the ')'
 	for bytes.HasSuffix(v, []byte(`\`)) { // ends with escape character so go to next end
-		n, err := readUntil(r, ')')
+		n, err := peekingReader.ReadUntil(r, ')')
 		if err != nil {
 			return nil, err
 		}
@@ -419,7 +421,7 @@ func separateUnicode(t []byte) text {
 	return text{string(t)}
 }
 
-func readName(r peekingReader) (name, error) {
+func readName(r peekingReader.Reader) (name, error) {
 	p, err := r.Peek(1)
 	if err != nil {
 		return "\x00", err
@@ -427,7 +429,7 @@ func readName(r peekingReader) (name, error) {
 	if p[0] == '/' {
 		r.ReadByte() // read past first '/'
 	}
-	v, err := readUntilAny(r, delimChars)
+	v, err := peekingReader.ReadUntilAny(r, delimChars)
 	if err != nil {
 		return "\x00", err
 	}
@@ -438,10 +440,10 @@ func readName(r peekingReader) (name, error) {
 	return name(v), err
 }
 
-func readDictionary(r peekingReader) (dictionary, error) {
+func readDictionary(r peekingReader.Reader) (dictionary, error) {
 	d := make(dictionary)
 	for {
-		if err := skipSpaces(r); err != nil {
+		if err := peekingReader.SkipSpaces(r); err != nil {
 			return nil, err
 		}
 		name, err := readName(r)
@@ -460,7 +462,7 @@ func readDictionary(r peekingReader) (dictionary, error) {
 		}
 		d[name] = item
 
-		if err = skipSpaces(r); err != nil {
+		if err = peekingReader.SkipSpaces(r); err != nil {
 			return nil, err
 		}
 		p, err := r.Peek(2)
@@ -477,7 +479,7 @@ func readDictionary(r peekingReader) (dictionary, error) {
 // readTokenOrObjectReference attempts to read an object reference if possible and returns
 // a token if not possible. Object references consist of 3 parts:
 //   1. number, 2. generation and 3. "R" or "obj"
-func readTokenOrObjectReference(b byte, r peekingReader) (token, *objectref, error) {
+func readTokenOrObjectReference(b byte, r peekingReader.Reader) (token, *objectref, error) {
 	tok, err := readToken(b, r)
 	if err != nil {
 		return "\x00", nil, err
@@ -534,8 +536,8 @@ func readTokenOrObjectReference(b byte, r peekingReader) (token, *objectref, err
 	return "\x00", &objectref{refString: fmt.Sprintf("%d %d", number, generation), refType: refType}, nil
 }
 
-func readToken(b byte, r peekingReader) (token, error) {
-	tok, err := readUntilAny(r, delimChars)
+func readToken(b byte, r peekingReader.Reader) (token, error) {
+	tok, err := peekingReader.ReadUntilAny(r, delimChars)
 	if err != nil {
 		return "\x00", err
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/EndFirstCorp/pdflib"
+	"github.com/EndFirstCorp/peekingReader"
 	"github.com/ledongthuc/pdf"
 	pdfcontent "github.com/unidoc/unidoc/pdf/contentstream"
 	updf "github.com/unidoc/unidoc/pdf/model"
@@ -33,10 +34,20 @@ func TestSamsung(t *testing.T) {
 	//fmt.Println(r.(*bytes.Buffer).String())
 }
 
+func TestFindCatalog(t *testing.T) {
+	f, _ := os.Open(`testData/102725-PUB-Replacement-PUBLIC.pdf`)
+
+	_, err := Text(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	//fmt.Println(r.(*bytes.Buffer).String())
+}
+
 func TestGetTextsection(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/contents-v1.4.txt`)
 
-	s, err := getTextSections(newMemReader(b))
+	s, err := getTextSections(peekingReader.NewMemReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +57,7 @@ func TestGetTextsection(t *testing.T) {
 func TestGetText(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/132_0.txt`)
 
-	s, err := getTextSections(newMemReader(b))
+	s, err := getTextSections(peekingReader.NewMemReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +78,7 @@ func TestProfoto(t *testing.T) {
 
 func TestGetTextSections(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/textSection.txt`)
-	_, err := getTextSections(newMemReader(b))
+	_, err := getTextSections(peekingReader.NewMemReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -413,11 +413,23 @@ func readbfrange(r peekingReader.Reader, length token) (cmap, error) {
 			case 2: // values
 				repl, _ := strconv.ParseInt(string(v), 16, 16)
 				var count int64
-				for i := start; i <= end; i++ {
-					format := fmt.Sprintf("%%0%dx", digits) // format for however many digits we originally had
-					cmap[hexdata(strings.ToUpper(fmt.Sprintf(format, i)))] = fmt.Sprintf("%c", repl+count)
+				format := fmt.Sprintf("%%0%dx", digits) // format for however many digits we originally had
+				for j := start; j <= end; j++ {
+					cmap[hexdata(strings.ToUpper(fmt.Sprintf(format, j)))] = fmt.Sprintf("%c", repl+count)
 					count++
 				}
+			}
+
+		case array:
+			if i%3 != 2 {
+				return nil, fmt.Errorf("unexpected array at position %d", i)
+			}
+			format := fmt.Sprintf("%%0%dx", digits) // format for however many digits we originally had
+			count := 0
+			for j := start; j <= end; j++ {
+				repl, _ := strconv.ParseInt(string(v[count].(hexdata)), 16, 16)
+				cmap[hexdata(strings.ToUpper(fmt.Sprintf(format, j)))] = fmt.Sprintf("%c", repl)
+				count++
 			}
 
 		default:

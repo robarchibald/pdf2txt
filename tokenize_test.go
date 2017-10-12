@@ -139,10 +139,16 @@ func TestReadDictionary(t *testing.T) {
 	dict = `/Type /Catalog
 /Outlines 2 0 R
 /Pages 6 0 R
->>`
+>> `
 	actual, _ = readDictionary(peekingReader.NewMemReader([]byte(dict)))
-	if actual != nil {
-		t.Error("expected valid dictionary")
+	if actual == nil || actual["/Type"] != name("/Catalog") {
+		t.Error("expected valid dictionary", actual)
+	}
+	if o, ok := actual["/Outlines"].(*objectref); !ok || o.refString != "2 0" {
+		t.Error("expected valid refString", o)
+	}
+	if o, ok := actual["/Pages"].(*objectref); !ok || o.refString != "6 0" {
+		t.Error("expected valid refString", o)
 	}
 }
 
@@ -207,5 +213,15 @@ func TestProfotoUGTokenize(t *testing.T) {
 
 		}
 		count++
+	}
+}
+
+func TestCatalogTokenize(t *testing.T) {
+	f, _ := os.Open(`testData/catalog.txt`)
+	tChan := make(chan interface{})
+	go tokenize(peekingReader.NewBufReader(f), tChan)
+	tok := <-tChan
+	if obj, ok := tok.(*object); !ok || obj.refString != "7967 0" || obj.dict["/Type"] != name("/Catalog") {
+		t.Error("unable to parse", obj)
 	}
 }

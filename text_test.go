@@ -104,6 +104,15 @@ func TestGetObjectStream(t *testing.T) {
 	}
 }
 
+func TestGetCmap(t *testing.T) {
+	f, _ := os.Open(`testData/bfrange.txt`)
+	r := peekingReader.NewBufReader(f)
+	_, err := getCmap(r)
+	if err != nil {
+		t.Error("expected success", err)
+	}
+}
+
 func BenchmarkUnidoc(t *testing.B) {
 	f, err := os.Open(`testData/Kicker.pdf`)
 	if err != nil {

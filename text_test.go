@@ -94,6 +94,23 @@ func TestProfotoUG(t *testing.T) {
 	//fmt.Println(r.(*bytes.Buffer).String())
 }
 
+func TestUnexpectedEOF(t *testing.T) {
+	f, _ := os.Open(`testData/financial_accounting.pdf`)
+
+	_, err := Text(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCh5thru8(t *testing.T) {
+	f, _ := os.Open(`testData/ch5thru8.pdf`)
+	_, err := Text(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGetObjectStream(t *testing.T) {
 	b, _ := ioutil.ReadFile(`testData/objectstream.txt`)
 	o := &object{dict: dictionary{"/Type": name("/ObjStm"), "/N": token("5"), "/First": token("34")}}
